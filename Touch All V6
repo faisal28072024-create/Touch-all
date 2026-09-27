@@ -1,38 +1,41 @@
 --[[
 ============================================================
- TL / LTL TELEPORT FUN PROTOTYPE V6
+ TL / LTL TELEPORT PROTOTYPE V6.1
  LocalScript - Roblox Studio
 ============================================================
 
- TELEPORT:
- • Tepat di posisi HumanoidRootPart target
- • Tidak lagi berada 2 stud di depan target
+ TARGET:
+ • Player selector
+ • Username + Team
+ • Selected player rainbow outline
+ • Lock Player
+
+ POSITION:
+ • CENTER  = tepat di target
+ • FRONT   = di depan target
+ • BACK    = di belakang target
+ • Distance dapat diatur
 
  MODES:
- • NORMAL     - A → B → C → D
- • LOCK       - A → A → A sampai A respawn → B
- • RANDOM     - Target acak
- • NEAREST    - Target terdekat
- • CYCLE      - Urutan target diulang
- • HUNTER     - Target terjauh
- • PING-PONG  - A → B → C → B → A
- • SURVIVOR   - Target mati dilewati
- • LAST       - Mempertahankan target terakhir selama valid
+ • NORMAL
+ • LOCK
+ • RANDOM
+ • NEAREST
+ • CYCLE
+ • HUNTER
+ • PING-PONG
+ • SURVIVOR
+ • LAST
 
- FITUR:
- • TL
- • LTL
- • STOP
- • Delay 0 - 10 detik
- • Multi-select team filter
+ IMPROVEMENTS:
+ • Team filter tersimpan
+ • Smooth drag
+ • Drag hanya dari header
+ • Player list scrolling
  • Team list scrolling
- • Mode selector
- • Return to start
- • Mouse + Touch
- • Draggable UI
- • Mobile friendly
-
- FUN / STUDIO PROTOTYPE
+ • STOP FORCE
+ • Mobile + Mouse
+ • Compact UI
 ============================================================
 ]]
 
@@ -43,6 +46,7 @@
 local Players = game:GetService("Players")
 local Teams = game:GetService("Teams")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
@@ -54,12 +58,17 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local CONFIG = {
 	TeleportDelay = 0.2,
 
-	-- 0 = tepat di posisi target
-	TargetOffset = CFrame.new(0, 0, 0),
+	-- Default:
+	-- CENTER = CFrame.new(0,0,0)
+	PositionMode = "Center",
+
+	Distance = 2,
 
 	ReturnToStart = true,
 
 	MaxDelay = 10,
+
+	MaxDistance = 500,
 
 	Mode = "Normal",
 }
@@ -91,91 +100,60 @@ local LoopMode = false
 
 local StartCFrame = nil
 
+-- Player yang dipilih di UI
+local SelectedPlayer = nil
+
+-- Player yang dikunci
+local LockedPlayer = nil
+
+-- Team filter
+-- IMPORTANT:
+-- tidak di-reset ketika LocalPlayer berganti team
 local IgnoredTeams = {}
 
--- Untuk Ping-Pong
-local PingPongForward = true
+local TeamInitialized = false
 
--- Untuk Last Target
+-- Last target
 local LastTarget = nil
 
+local PingPongForward = true
+
+-- Digunakan untuk membatalkan aksi lama
+local ActionToken = 0
+
 --============================================================
--- GUI
+-- SCREEN GUI
 --============================================================
 
 local ScreenGui = Instance.new("ScreenGui")
 
-ScreenGui.Name = "TL_LTL_GUI_V6"
+ScreenGui.Name = "TL_LTL_GUI_V6_1"
+
 ScreenGui.ResetOnSpawn = false
-ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+ScreenGui.ZIndexBehavior =
+	Enum.ZIndexBehavior.Sibling
 
 ScreenGui.Parent = PlayerGui
 
 --============================================================
--- DRAG SYSTEM
+-- SMOOTH DRAG SYSTEM
 --============================================================
 
-local function MakeDraggable(Object)
+local function MakeDraggable(Object, Handle)
+
+	Handle = Handle or Object
 
 	local Dragging = false
 	local DragStart = nil
 	local StartPosition = nil
 
-	local function Update(Input)
+	local TargetX = 0
+	local TargetY = 0
 
-		if not DragStart or not StartPosition then
-			return
-		end
+	local DragInput = nil
 
-		local Delta =
-			Input.Position - DragStart
-
-		local NewX =
-			StartPosition.X.Offset + Delta.X
-
-		local NewY =
-			StartPosition.Y.Offset + Delta.Y
-
-		local ScreenSize =
-			ScreenGui.AbsoluteSize
-
-		local ObjectSize =
-			Object.AbsoluteSize
-
-		local MaxX =
-			math.max(
-				0,
-				ScreenSize.X - ObjectSize.X
-			)
-
-		local MaxY =
-			math.max(
-				0,
-				ScreenSize.Y - ObjectSize.Y
-			)
-
-		NewX =
-			math.clamp(
-				NewX,
-				0,
-				MaxX
-			)
-
-		NewY =
-			math.clamp(
-				NewY,
-				0,
-				MaxY
-			)
-
-		Object.Position =
-			UDim2.fromOffset(
-				NewX,
-				NewY
-			)
-	end
-
-	Object.InputBegan:Connect(function(Input)
+	Handle.InputBegan:Connect(function(Input)
 
 		if Input.UserInputType ==
 			Enum.UserInputType.MouseButton1
@@ -190,6 +168,12 @@ local function MakeDraggable(Object)
 			StartPosition =
 				Object.Position
 
+			TargetX =
+				StartPosition.X.Offset
+
+			TargetY =
+				StartPosition.Y.Offset
+
 			Input.Changed:Connect(function()
 
 				if Input.UserInputState ==
@@ -200,7 +184,22 @@ local function MakeDraggable(Object)
 				end
 
 			end)
+
 		end
+
+	end)
+
+	Handle.InputChanged:Connect(function(Input)
+
+		if Input.UserInputType ==
+			Enum.UserInputType.MouseMovement
+			or Input.UserInputType ==
+			Enum.UserInputType.Touch then
+
+			DragInput = Input
+
+		end
+
 	end)
 
 	UserInputService.InputChanged:Connect(function(Input)
@@ -209,16 +208,91 @@ local function MakeDraggable(Object)
 			return
 		end
 
-		if Input.UserInputType ==
-			Enum.UserInputType.MouseMovement
-			or Input.UserInputType ==
-			Enum.UserInputType.Touch then
+		if Input ~= DragInput
+			and Input.UserInputType ~=
+				Enum.UserInputType.MouseMovement
+			and Input.UserInputType ~=
+				Enum.UserInputType.Touch then
 
-			Update(Input)
-
+			return
 		end
 
+		local Delta =
+			Input.Position - DragStart
+
+		local ScreenSize =
+			ScreenGui.AbsoluteSize
+
+		local ObjectSize =
+			Object.AbsoluteSize
+
+		local MaxX =
+			math.max(
+				0,
+				ScreenSize.X -
+					ObjectSize.X
+			)
+
+		local MaxY =
+			math.max(
+				0,
+				ScreenSize.Y -
+					ObjectSize.Y
+			)
+
+		TargetX =
+			math.clamp(
+				StartPosition.X.Offset +
+					Delta.X,
+				0,
+				MaxX
+			)
+
+		TargetY =
+			math.clamp(
+				StartPosition.Y.Offset +
+					Delta.Y,
+				0,
+				MaxY
+			)
+
 	end)
+
+	local Connection
+
+	Connection =
+		RunService.RenderStepped:Connect(
+			function()
+
+				if not Dragging then
+					return
+				end
+
+				local Current =
+					Object.Position
+
+				local NewX =
+					Current.X.Offset +
+					(TargetX -
+						Current.X.Offset) *
+					0.35
+
+				local NewY =
+					Current.Y.Offset +
+					(TargetY -
+						Current.Y.Offset) *
+					0.35
+
+				Object.Position =
+					UDim2.fromOffset(
+						NewX,
+						NewY
+					)
+
+			end
+		)
+
+	return Connection
 end
 
 --============================================================
@@ -243,14 +317,14 @@ MainButton.Position =
 	)
 
 MainButton.BackgroundColor3 =
-	Color3.fromRGB(45, 45, 45)
+	Color3.fromRGB(45,45,45)
 
 MainButton.BackgroundTransparency = 0.1
 
 MainButton.Text = "TL"
 
 MainButton.TextColor3 =
-	Color3.new(1, 1, 1)
+	Color3.new(1,1,1)
 
 MainButton.TextSize = 20
 
@@ -264,7 +338,7 @@ local MainCorner =
 	Instance.new("UICorner")
 
 MainCorner.CornerRadius =
-	UDim.new(1, 0)
+	UDim.new(1,0)
 
 MainCorner.Parent =
 	MainButton
@@ -275,12 +349,15 @@ local MainStroke =
 MainStroke.Thickness = 2
 
 MainStroke.Color =
-	Color3.fromRGB(120, 120, 120)
+	Color3.fromRGB(120,120,120)
 
 MainStroke.Parent =
 	MainButton
 
-MakeDraggable(MainButton)
+MakeDraggable(
+	MainButton,
+	MainButton
+)
 
 --============================================================
 -- MENU
@@ -292,7 +369,7 @@ local Menu =
 Menu.Name = "Menu"
 
 Menu.Size =
-	UDim2.fromOffset(220, 270)
+	UDim2.fromOffset(220,270)
 
 Menu.Position =
 	UDim2.new(
@@ -303,7 +380,7 @@ Menu.Position =
 	)
 
 Menu.BackgroundColor3 =
-	Color3.fromRGB(25, 25, 25)
+	Color3.fromRGB(25,25,25)
 
 Menu.BackgroundTransparency = 0.05
 
@@ -316,7 +393,7 @@ local MenuCorner =
 	Instance.new("UICorner")
 
 MenuCorner.CornerRadius =
-	UDim.new(0, 12)
+	UDim.new(0,12)
 
 MenuCorner.Parent =
 	Menu
@@ -327,16 +404,37 @@ local MenuStroke =
 MenuStroke.Thickness = 2
 
 MenuStroke.Color =
-	Color3.fromRGB(80, 80, 80)
+	Color3.fromRGB(80,80,80)
 
 MenuStroke.Parent =
 	Menu
 
-MakeDraggable(Menu)
+--============================================================
+-- HEADER / DRAG HANDLE
+--============================================================
 
---============================================================
--- TITLE
---============================================================
+local Header =
+	Instance.new("Frame")
+
+Header.Name = "DragHeader"
+
+Header.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		38
+	)
+
+Header.BackgroundTransparency = 1
+
+Header.Parent =
+	Menu
+
+MakeDraggable(
+	Menu,
+	Header
+)
 
 local Title =
 	Instance.new("TextLabel")
@@ -345,27 +443,28 @@ Title.Size =
 	UDim2.new(
 		1,
 		-20,
-		0,
-		30
+		1,
+		0
 	)
 
 Title.Position =
-	UDim2.fromOffset(10, 7)
+	UDim2.fromOffset(10,0)
 
 Title.BackgroundTransparency = 1
 
-Title.Text = "TELEPORT V6"
+Title.Text =
+	"TELEPORT V6.1"
 
 Title.TextColor3 =
-	Color3.new(1, 1, 1)
+	Color3.new(1,1,1)
 
-Title.TextSize = 17
+Title.TextSize = 16
 
 Title.Font =
 	Enum.Font.GothamBold
 
 Title.Parent =
-	Menu
+	Header
 
 --============================================================
 -- SCROLL CONTAINER
@@ -375,7 +474,7 @@ local Scroll =
 	Instance.new("ScrollingFrame")
 
 Scroll.Name =
-	"SettingsScroll"
+	"MainScroll"
 
 Scroll.Size =
 	UDim2.new(
@@ -386,7 +485,7 @@ Scroll.Size =
 	)
 
 Scroll.Position =
-	UDim2.fromOffset(6, 38)
+	UDim2.fromOffset(6,40)
 
 Scroll.BackgroundTransparency = 1
 
@@ -394,10 +493,8 @@ Scroll.BorderSizePixel = 0
 
 Scroll.ScrollBarThickness = 4
 
-Scroll.ScrollBarImageTransparency = 0.15
-
 Scroll.CanvasSize =
-	UDim2.fromOffset(0, 0)
+	UDim2.fromOffset(0,0)
 
 Scroll.ScrollingDirection =
 	Enum.ScrollingDirection.Y
@@ -409,7 +506,7 @@ local ScrollLayout =
 	Instance.new("UIListLayout")
 
 ScrollLayout.Padding =
-	UDim.new(0, 7)
+	UDim.new(0,6)
 
 ScrollLayout.SortOrder =
 	Enum.SortOrder.LayoutOrder
@@ -421,16 +518,16 @@ local ScrollPadding =
 	Instance.new("UIPadding")
 
 ScrollPadding.PaddingTop =
-	UDim.new(0, 2)
+	UDim.new(0,2)
 
 ScrollPadding.PaddingBottom =
-	UDim.new(0, 8)
+	UDim.new(0,8)
 
 ScrollPadding.PaddingLeft =
-	UDim.new(0, 6)
+	UDim.new(0,6)
 
 ScrollPadding.PaddingRight =
-	UDim.new(0, 6)
+	UDim.new(0,6)
 
 ScrollPadding.Parent =
 	Scroll
@@ -448,6 +545,56 @@ ScrollLayout:GetPropertyChangedSignal(
 end)
 
 --============================================================
+-- HELPER
+--============================================================
+
+local function CreateLabel(
+	Text,
+	Height,
+	Order
+)
+
+	local Label =
+		Instance.new("TextLabel")
+
+	Label.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			Height
+		)
+
+	Label.BackgroundTransparency = 1
+
+	Label.Text =
+		Text
+
+	Label.TextColor3 =
+		Color3.fromRGB(
+			190,
+			190,
+			190
+		)
+
+	Label.TextSize = 11
+
+	Label.Font =
+		Enum.Font.GothamBold
+
+	Label.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	Label.LayoutOrder =
+		Order
+
+	Label.Parent =
+		Scroll
+
+	return Label
+end
+
+--============================================================
 -- DELAY
 --============================================================
 
@@ -459,7 +606,7 @@ DelayRow.Size =
 		1,
 		0,
 		0,
-		35
+		34
 	)
 
 DelayRow.BackgroundTransparency = 1
@@ -483,10 +630,14 @@ DelayLabel.Size =
 DelayLabel.BackgroundTransparency = 1
 
 DelayLabel.Text =
-	"DELAY (SEC)"
+	"DELAY"
 
 DelayLabel.TextColor3 =
-	Color3.fromRGB(190, 190, 190)
+	Color3.fromRGB(
+		190,
+		190,
+		190
+	)
 
 DelayLabel.TextSize = 12
 
@@ -502,15 +653,12 @@ DelayLabel.Parent =
 local DelayBox =
 	Instance.new("TextBox")
 
-DelayBox.Name =
-	"DelayInput"
-
 DelayBox.Size =
 	UDim2.new(
 		0.45,
 		0,
 		0,
-		30
+		29
 	)
 
 DelayBox.Position =
@@ -522,7 +670,11 @@ DelayBox.Position =
 	)
 
 DelayBox.BackgroundColor3 =
-	Color3.fromRGB(50, 50, 50)
+	Color3.fromRGB(
+		50,
+		50,
+		50
+	)
 
 DelayBox.Text =
 	tostring(
@@ -530,12 +682,9 @@ DelayBox.Text =
 	)
 
 DelayBox.TextColor3 =
-	Color3.new(1, 1, 1)
+	Color3.new(1,1,1)
 
-DelayBox.PlaceholderText =
-	"0.2"
-
-DelayBox.TextSize = 13
+DelayBox.TextSize = 12
 
 DelayBox.Font =
 	Enum.Font.Gotham
@@ -549,7 +698,7 @@ local DelayCorner =
 	Instance.new("UICorner")
 
 DelayCorner.CornerRadius =
-	UDim.new(0, 7)
+	UDim.new(0,7)
 
 DelayCorner.Parent =
 	DelayBox
@@ -561,7 +710,7 @@ local function UpdateDelay()
 			DelayBox.Text
 		)
 
-	if Number == nil then
+	if not Number then
 
 		DelayBox.Text =
 			tostring(
@@ -572,18 +721,17 @@ local function UpdateDelay()
 
 	end
 
-	Number =
+	CONFIG.TeleportDelay =
 		math.clamp(
 			Number,
 			0,
 			CONFIG.MaxDelay
 		)
 
-	CONFIG.TeleportDelay =
-		Number
-
 	DelayBox.Text =
-		tostring(Number)
+		tostring(
+			CONFIG.TeleportDelay
+		)
 
 end
 
@@ -592,7 +740,7 @@ DelayBox.FocusLost:Connect(
 )
 
 --============================================================
--- MODE BUTTON
+-- MODE
 --============================================================
 
 local ModeButton =
@@ -603,16 +751,20 @@ ModeButton.Size =
 		1,
 		0,
 		0,
-		36
+		34
 	)
 
 ModeButton.BackgroundColor3 =
-	Color3.fromRGB(55, 55, 55)
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
 
 ModeButton.TextColor3 =
-	Color3.new(1, 1, 1)
+	Color3.new(1,1,1)
 
-ModeButton.TextSize = 12
+ModeButton.TextSize = 11
 
 ModeButton.Font =
 	Enum.Font.GothamBold
@@ -626,23 +778,20 @@ local ModeCorner =
 	Instance.new("UICorner")
 
 ModeCorner.CornerRadius =
-	UDim.new(0, 8)
+	UDim.new(0,8)
 
 ModeCorner.Parent =
 	ModeButton
 
 local function UpdateModeText()
 
-	local CurrentMode =
+	CONFIG.Mode =
 		MODES[ModeIndex]
 
-	CONFIG.Mode =
-		CurrentMode
-
 	ModeButton.Text =
-		"MODE  •  " ..
+		"MODE • " ..
 		string.upper(
-			CurrentMode
+			CONFIG.Mode
 		)
 
 end
@@ -671,40 +820,772 @@ ModeButton.MouseButton1Click:Connect(
 )
 
 --============================================================
--- TEAM TITLE
+-- POSITION MODE
 --============================================================
 
-local TeamTitle =
-	Instance.new("TextLabel")
+local PositionButton =
+	Instance.new("TextButton")
 
-TeamTitle.Size =
+PositionButton.Size =
 	UDim2.new(
 		1,
 		0,
 		0,
-		25
+		34
 	)
 
-TeamTitle.BackgroundTransparency = 1
+PositionButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
 
-TeamTitle.Text =
-	"IGNORE TEAMS  •  MULTI SELECT"
+PositionButton.TextColor3 =
+	Color3.new(1,1,1)
 
-TeamTitle.TextColor3 =
-	Color3.fromRGB(190, 190, 190)
+PositionButton.TextSize = 11
 
-TeamTitle.TextSize = 11
-
-TeamTitle.Font =
+PositionButton.Font =
 	Enum.Font.GothamBold
 
-TeamTitle.TextXAlignment =
+PositionButton.LayoutOrder = 3
+
+PositionButton.Parent =
+	Scroll
+
+local PositionCorner =
+	Instance.new("UICorner")
+
+PositionCorner.CornerRadius =
+	UDim.new(0,8)
+
+PositionCorner.Parent =
+	PositionButton
+
+local PositionModes = {
+	"Center",
+	"Front",
+	"Back",
+}
+
+local PositionIndex = 1
+
+local function UpdatePositionText()
+
+	CONFIG.PositionMode =
+		PositionModes[
+			PositionIndex
+		]
+
+	PositionButton.Text =
+		"POSITION • " ..
+		string.upper(
+			CONFIG.PositionMode
+		)
+
+end
+
+UpdatePositionText()
+
+PositionButton.MouseButton1Click:Connect(
+	function()
+
+		if Running then
+			return
+		end
+
+		PositionIndex += 1
+
+		if PositionIndex >
+			#PositionModes then
+
+			PositionIndex = 1
+
+		end
+
+		UpdatePositionText()
+
+	end
+)
+
+--============================================================
+-- DISTANCE
+--============================================================
+
+local DistanceRow =
+	Instance.new("Frame")
+
+DistanceRow.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		34
+	)
+
+DistanceRow.BackgroundTransparency = 1
+
+DistanceRow.LayoutOrder = 4
+
+DistanceRow.Parent =
+	Scroll
+
+local DistanceLabel =
+	Instance.new("TextLabel")
+
+DistanceLabel.Size =
+	UDim2.new(
+		0.55,
+		0,
+		1,
+		0
+	)
+
+DistanceLabel.BackgroundTransparency = 1
+
+DistanceLabel.Text =
+	"DISTANCE (STUD)"
+
+DistanceLabel.TextColor3 =
+	Color3.fromRGB(
+		190,
+		190,
+		190
+	)
+
+DistanceLabel.TextSize = 11
+
+DistanceLabel.Font =
+	Enum.Font.GothamBold
+
+DistanceLabel.TextXAlignment =
 	Enum.TextXAlignment.Left
 
-TeamTitle.LayoutOrder = 3
+DistanceLabel.Parent =
+	DistanceRow
 
-TeamTitle.Parent =
+local DistanceBox =
+	Instance.new("TextBox")
+
+DistanceBox.Size =
+	UDim2.new(
+		0.45,
+		0,
+		0,
+		29
+	)
+
+DistanceBox.Position =
+	UDim2.new(
+		0.55,
+		0,
+		0,
+		2
+	)
+
+DistanceBox.BackgroundColor3 =
+	Color3.fromRGB(
+		50,
+		50,
+		50
+	)
+
+DistanceBox.Text =
+	tostring(
+		CONFIG.Distance
+	)
+
+DistanceBox.TextColor3 =
+	Color3.new(1,1,1)
+
+DistanceBox.TextSize = 12
+
+DistanceBox.Font =
+	Enum.Font.Gotham
+
+DistanceBox.ClearTextOnFocus = false
+
+DistanceBox.Parent =
+	DistanceRow
+
+local DistanceCorner =
+	Instance.new("UICorner")
+
+DistanceCorner.CornerRadius =
+	UDim.new(0,7)
+
+DistanceCorner.Parent =
+	DistanceBox
+
+local function UpdateDistance()
+
+	local Number =
+		tonumber(
+			DistanceBox.Text
+		)
+
+	if not Number then
+
+		DistanceBox.Text =
+			tostring(
+				CONFIG.Distance
+			)
+
+		return
+
+	end
+
+	CONFIG.Distance =
+		math.clamp(
+			Number,
+			0,
+			CONFIG.MaxDistance
+		)
+
+	DistanceBox.Text =
+		tostring(
+			CONFIG.Distance
+		)
+
+end
+
+DistanceBox.FocusLost:Connect(
+	UpdateDistance
+)
+
+--============================================================
+-- SELECTED PLAYER LABEL
+--============================================================
+
+local SelectedLabel =
+	CreateLabel(
+		"TARGET PLAYER",
+		22,
+		5
+	)
+
+--============================================================
+-- PLAYER LIST
+--============================================================
+
+local PlayerList =
+	Instance.new("ScrollingFrame")
+
+PlayerList.Name =
+	"PlayerList"
+
+PlayerList.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		105
+	)
+
+PlayerList.BackgroundColor3 =
+	Color3.fromRGB(
+		35,
+		35,
+		35
+	)
+
+PlayerList.BorderSizePixel = 0
+
+PlayerList.ScrollBarThickness = 4
+
+PlayerList.CanvasSize =
+	UDim2.fromOffset(
+		0,
+		0
+	)
+
+PlayerList.ScrollingDirection =
+	Enum.ScrollingDirection.Y
+
+PlayerList.LayoutOrder = 6
+
+PlayerList.Parent =
 	Scroll
+
+local PlayerCorner =
+	Instance.new("UICorner")
+
+PlayerCorner.CornerRadius =
+	UDim.new(0,8)
+
+PlayerCorner.Parent =
+	PlayerList
+
+local PlayerLayout =
+	Instance.new("UIListLayout")
+
+PlayerLayout.Padding =
+	UDim.new(0,4)
+
+PlayerLayout.SortOrder =
+	Enum.SortOrder.Name
+
+PlayerLayout.Parent =
+	PlayerList
+
+local PlayerPadding =
+	Instance.new("UIPadding")
+
+PlayerPadding.PaddingTop =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingBottom =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingLeft =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingRight =
+	UDim.new(0,5)
+
+PlayerPadding.Parent =
+	PlayerList
+
+PlayerLayout:GetPropertyChangedSignal(
+	"AbsoluteContentSize"
+):Connect(function()
+
+	PlayerList.CanvasSize =
+		UDim2.fromOffset(
+			0,
+			PlayerLayout.AbsoluteContentSize.Y + 10
+		)
+
+end)
+
+--============================================================
+-- SELECTED PLAYER UPDATE
+--============================================================
+
+local function UpdateSelectedLabel()
+
+	if not SelectedPlayer then
+
+		SelectedLabel.Text =
+			"TARGET PLAYER  •  NONE"
+
+		return
+
+	end
+
+	local TeamName = "No Team"
+
+	if SelectedPlayer.Team then
+		TeamName =
+			SelectedPlayer.Team.Name
+	end
+
+	SelectedLabel.Text =
+		"TARGET • " ..
+		SelectedPlayer.Name ..
+		"  [" ..
+		TeamName ..
+		"]"
+
+end
+
+--============================================================
+-- RAINBOW HIGHLIGHT
+--============================================================
+
+local RainbowHighlight = nil
+
+local RainbowConnection = nil
+
+local function RemoveHighlight()
+
+	if RainbowConnection then
+
+		RainbowConnection:Disconnect()
+
+		RainbowConnection = nil
+
+	end
+
+	if RainbowHighlight then
+
+		RainbowHighlight:Destroy()
+
+		RainbowHighlight = nil
+
+	end
+
+end
+
+local function HighlightPlayer(Player)
+
+	RemoveHighlight()
+
+	if not Player then
+		return
+	end
+
+	local Character =
+		Player.Character
+
+	if not Character then
+		return
+	end
+
+	local Highlight =
+		Instance.new("Highlight")
+
+	Highlight.Name =
+		"TL_Selected_Rainbow"
+
+	Highlight.Adornee =
+		Character
+
+	Highlight.FillTransparency =
+		0.85
+
+	Highlight.OutlineTransparency =
+		0
+
+	Highlight.Parent =
+		ScreenGui
+
+	RainbowHighlight =
+		Highlight
+
+	local Hue = 0
+
+	RainbowConnection =
+		RunService.RenderStepped:Connect(
+			function(dt)
+
+				if not Highlight.Parent then
+					return
+				end
+
+				Hue =
+					(Hue + dt * 0.5)
+					% 1
+
+				Highlight.OutlineColor =
+					Color3.fromHSV(
+						Hue,
+						1,
+						1
+					)
+
+			end
+		)
+
+end
+
+--============================================================
+-- SELECT PLAYER
+--============================================================
+
+local function SelectPlayer(Player)
+
+	SelectedPlayer =
+		Player
+
+	UpdateSelectedLabel()
+
+	HighlightPlayer(
+		Player
+	)
+
+end
+
+--============================================================
+-- PLAYER BUTTON
+--============================================================
+
+local function CreatePlayerButton(Player)
+
+	local Button =
+		Instance.new("TextButton")
+
+	Button.Name =
+		"Player_" ..
+		Player.UserId
+
+	Button.Size =
+		UDim2.new(
+			1,
+			-10,
+			0,
+			32
+		)
+
+	Button.BackgroundColor3 =
+		Color3.fromRGB(
+			50,
+			50,
+			50
+		)
+
+	Button.TextColor3 =
+		Color3.new(1,1,1)
+
+	Button.TextSize = 10
+
+	Button.Font =
+		Enum.Font.GothamBold
+
+	Button.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	local TeamName =
+		"No Team"
+
+	if Player.Team then
+		TeamName =
+			Player.Team.Name
+	end
+
+	Button.Text =
+		"  " ..
+		Player.Name ..
+		"   •   " ..
+		TeamName
+
+	Button.Parent =
+		PlayerList
+
+	local Corner =
+		Instance.new("UICorner")
+
+	Corner.CornerRadius =
+		UDim.new(0,6)
+
+	Corner.Parent =
+		Button
+
+	Button.MouseButton1Click:Connect(
+		function()
+
+			SelectPlayer(
+				Player
+			)
+
+		end
+	)
+
+end
+
+--============================================================
+-- REFRESH PLAYERS
+--============================================================
+
+local function RefreshPlayers()
+
+	for _, Child in ipairs(
+		PlayerList:GetChildren()
+	) do
+
+		if Child:IsA("TextButton") then
+			Child:Destroy()
+		end
+
+	end
+
+	for _, Player in ipairs(
+		Players:GetPlayers()
+	) do
+
+		if Player ~= LocalPlayer then
+
+			CreatePlayerButton(
+				Player
+			)
+
+		end
+
+	end
+
+end
+
+RefreshPlayers()
+
+Players.PlayerAdded:Connect(
+	function()
+
+		task.wait()
+
+		RefreshPlayers()
+
+	end
+)
+
+Players.PlayerRemoving:Connect(
+	function(Player)
+
+		if SelectedPlayer == Player then
+
+			SelectedPlayer = nil
+
+			LockedPlayer = nil
+
+			RemoveHighlight()
+
+			UpdateSelectedLabel()
+
+		end
+
+		RefreshPlayers()
+
+	end
+)
+
+--============================================================
+-- REFRESH PLAYERS BUTTON
+--============================================================
+
+local RefreshPlayersButton =
+	Instance.new("TextButton")
+
+RefreshPlayersButton.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		29
+	)
+
+RefreshPlayersButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
+
+RefreshPlayersButton.Text =
+	"↻  REFRESH PLAYERS"
+
+RefreshPlayersButton.TextColor3 =
+	Color3.new(1,1,1)
+
+RefreshPlayersButton.TextSize = 10
+
+RefreshPlayersButton.Font =
+	Enum.Font.GothamBold
+
+RefreshPlayersButton.LayoutOrder = 7
+
+RefreshPlayersButton.Parent =
+	Scroll
+
+local RPCorner =
+	Instance.new("UICorner")
+
+RPCorner.CornerRadius =
+	UDim.new(0,7)
+
+RPCorner.Parent =
+	RefreshPlayersButton
+
+RefreshPlayersButton.MouseButton1Click:Connect(
+	RefreshPlayers
+)
+
+--============================================================
+-- LOCK PLAYER BUTTON
+--============================================================
+
+local LockPlayerButton =
+	Instance.new("TextButton")
+
+LockPlayerButton.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		31
+	)
+
+LockPlayerButton.BackgroundColor3 =
+	Color3.fromRGB(
+		65,
+		65,
+		65
+	)
+
+LockPlayerButton.Text =
+	"LOCK SELECTED PLAYER"
+
+LockPlayerButton.TextColor3 =
+	Color3.new(1,1,1)
+
+LockPlayerButton.TextSize = 10
+
+LockPlayerButton.Font =
+	Enum.Font.GothamBold
+
+LockPlayerButton.LayoutOrder = 8
+
+LockPlayerButton.Parent =
+	Scroll
+
+local LPCorner =
+	Instance.new("UICorner")
+
+LPCorner.CornerRadius =
+	UDim.new(0,7)
+
+LPCorner.Parent =
+	LockPlayerButton
+
+local function UpdateLockButton()
+
+	if LockedPlayer then
+
+		LockPlayerButton.Text =
+			"🔒 LOCKED: " ..
+			LockedPlayer.Name
+
+	else
+
+		LockPlayerButton.Text =
+			"LOCK SELECTED PLAYER"
+
+	end
+
+end
+
+LockPlayerButton.MouseButton1Click:Connect(
+	function()
+
+		if SelectedPlayer then
+
+			if LockedPlayer ==
+				SelectedPlayer then
+
+				LockedPlayer = nil
+
+			else
+
+				LockedPlayer =
+					SelectedPlayer
+
+			end
+
+			UpdateLockButton()
+
+		end
+
+	end
+)
+
+--============================================================
+-- TEAM FILTER TITLE
+--============================================================
+
+CreateLabel(
+	"IGNORE TEAMS",
+	22,
+	9
+)
 
 --============================================================
 -- TEAM LIST
@@ -721,25 +1602,30 @@ TeamList.Size =
 		1,
 		0,
 		0,
-		110
+		100
 	)
 
 TeamList.BackgroundColor3 =
-	Color3.fromRGB(35, 35, 35)
-
-TeamList.BackgroundTransparency = 0.05
+	Color3.fromRGB(
+		35,
+		35,
+		35
+	)
 
 TeamList.BorderSizePixel = 0
 
 TeamList.ScrollBarThickness = 4
 
 TeamList.CanvasSize =
-	UDim2.fromOffset(0, 0)
+	UDim2.fromOffset(
+		0,
+		0
+	)
 
 TeamList.ScrollingDirection =
 	Enum.ScrollingDirection.Y
 
-TeamList.LayoutOrder = 4
+TeamList.LayoutOrder = 10
 
 TeamList.Parent =
 	Scroll
@@ -748,7 +1634,7 @@ local TeamCorner =
 	Instance.new("UICorner")
 
 TeamCorner.CornerRadius =
-	UDim.new(0, 8)
+	UDim.new(0,8)
 
 TeamCorner.Parent =
 	TeamList
@@ -757,7 +1643,7 @@ local TeamLayout =
 	Instance.new("UIListLayout")
 
 TeamLayout.Padding =
-	UDim.new(0, 4)
+	UDim.new(0,4)
 
 TeamLayout.SortOrder =
 	Enum.SortOrder.Name
@@ -769,16 +1655,16 @@ local TeamPadding =
 	Instance.new("UIPadding")
 
 TeamPadding.PaddingTop =
-	UDim.new(0, 5)
+	UDim.new(0,5)
 
 TeamPadding.PaddingBottom =
-	UDim.new(0, 5)
+	UDim.new(0,5)
 
 TeamPadding.PaddingLeft =
-	UDim.new(0, 5)
+	UDim.new(0,5)
 
 TeamPadding.PaddingRight =
-	UDim.new(0, 5)
+	UDim.new(0,5)
 
 TeamPadding.Parent =
 	TeamList
@@ -805,7 +1691,8 @@ local function CreateTeamButton(Team)
 		Instance.new("TextButton")
 
 	Button.Name =
-		"Team_" .. Team.Name
+		"Team_" ..
+		Team.Name
 
 	Button.Size =
 		UDim2.new(
@@ -816,12 +1703,16 @@ local function CreateTeamButton(Team)
 		)
 
 	Button.BackgroundColor3 =
-		Color3.fromRGB(50, 50, 50)
+		Color3.fromRGB(
+			50,
+			50,
+			50
+		)
 
 	Button.TextColor3 =
-		Color3.new(1, 1, 1)
+		Color3.new(1,1,1)
 
-	Button.TextSize = 12
+	Button.TextSize = 11
 
 	Button.Font =
 		Enum.Font.GothamBold
@@ -833,7 +1724,7 @@ local function CreateTeamButton(Team)
 		Instance.new("UICorner")
 
 	Corner.CornerRadius =
-		UDim.new(0, 6)
+		UDim.new(0,6)
 
 	Corner.Parent =
 		Button
@@ -843,18 +1734,28 @@ local function CreateTeamButton(Team)
 		if IgnoredTeams[Team] then
 
 			Button.Text =
-				"✓  " .. Team.Name
+				"✓  " ..
+				Team.Name
 
 			Button.BackgroundColor3 =
-				Color3.fromRGB(75, 75, 75)
+				Color3.fromRGB(
+					75,
+					75,
+					75
+				)
 
 		else
 
 			Button.Text =
-				"○  " .. Team.Name
+				"○  " ..
+				Team.Name
 
 			Button.BackgroundColor3 =
-				Color3.fromRGB(50, 50, 50)
+				Color3.fromRGB(
+					50,
+					50,
+					50
+				)
 
 		end
 
@@ -867,11 +1768,13 @@ local function CreateTeamButton(Team)
 
 			if IgnoredTeams[Team] then
 
-				IgnoredTeams[Team] = nil
+				IgnoredTeams[Team] =
+					nil
 
 			else
 
-				IgnoredTeams[Team] = true
+				IgnoredTeams[Team] =
+					true
 
 			end
 
@@ -902,7 +1805,9 @@ local function RefreshTeams()
 		Teams:GetTeams()
 	) do
 
-		CreateTeamButton(Team)
+		CreateTeamButton(
+			Team
+		)
 
 	end
 
@@ -923,7 +1828,10 @@ Teams.ChildAdded:Connect(
 Teams.ChildRemoved:Connect(
 	function(Team)
 
-		IgnoredTeams[Team] = nil
+		-- Hanya hapus team yang benar-benar
+		-- sudah tidak ada.
+		IgnoredTeams[Team] =
+			nil
 
 		task.wait()
 
@@ -933,60 +1841,44 @@ Teams.ChildRemoved:Connect(
 )
 
 --============================================================
--- REFRESH BUTTON
+-- TEAM PERSISTENCE
 --============================================================
+-- PENTING:
+-- Tidak ada lagi kode yang otomatis
+-- menghapus / mengganti IgnoredTeams
+-- ketika LocalPlayer berganti team.
+--
+-- Jadi pilihan:
+--
+-- RED ✓
+-- BLUE ✓
+-- GREEN ○
+--
+-- tetap seperti itu meskipun player
+-- pindah team.
 
-local RefreshButton =
-	Instance.new("TextButton")
+if not TeamInitialized then
 
-RefreshButton.Size =
-	UDim2.new(
-		1,
-		0,
-		0,
-		30
-	)
+	if LocalPlayer.Team then
 
-RefreshButton.BackgroundColor3 =
-	Color3.fromRGB(55, 55, 55)
+		IgnoredTeams[
+			LocalPlayer.Team
+		] = true
 
-RefreshButton.Text =
-	"↻  REFRESH TEAMS"
+	end
 
-RefreshButton.TextColor3 =
-	Color3.new(1, 1, 1)
+	TeamInitialized = true
 
-RefreshButton.TextSize = 11
-
-RefreshButton.Font =
-	Enum.Font.GothamBold
-
-RefreshButton.LayoutOrder = 5
-
-RefreshButton.Parent =
-	Scroll
-
-local RefreshCorner =
-	Instance.new("UICorner")
-
-RefreshCorner.CornerRadius =
-	UDim.new(0, 7)
-
-RefreshCorner.Parent =
-	RefreshButton
-
-RefreshButton.MouseButton1Click:Connect(
-	RefreshTeams
-)
+end
 
 --============================================================
--- BUTTON CREATOR
+-- CONTROL BUTTON CREATOR
 --============================================================
 
-local function CreateButton(
+local function CreateControlButton(
 	Name,
 	Text,
-	LayoutOrder
+	Order
 )
 
 	local Button =
@@ -1000,25 +1892,29 @@ local function CreateButton(
 			1,
 			0,
 			0,
-			36
+			35
 		)
 
 	Button.BackgroundColor3 =
-		Color3.fromRGB(55, 55, 55)
+		Color3.fromRGB(
+			55,
+			55,
+			55
+		)
 
 	Button.Text =
 		Text
 
 	Button.TextColor3 =
-		Color3.new(1, 1, 1)
+		Color3.new(1,1,1)
 
-	Button.TextSize = 13
+	Button.TextSize = 12
 
 	Button.Font =
 		Enum.Font.GothamBold
 
 	Button.LayoutOrder =
-		LayoutOrder
+		Order
 
 	Button.Parent =
 		Scroll
@@ -1027,7 +1923,7 @@ local function CreateButton(
 		Instance.new("UICorner")
 
 	Corner.CornerRadius =
-		UDim.new(0, 8)
+		UDim.new(0,8)
 
 	Corner.Parent =
 		Button
@@ -1037,24 +1933,24 @@ local function CreateButton(
 end
 
 local TLButton =
-	CreateButton(
+	CreateControlButton(
 		"TLOnce",
-		"TL  •  ONCE",
-		6
+		"TL • ONCE",
+		11
 	)
 
 local LTLButton =
-	CreateButton(
+	CreateControlButton(
 		"LTL",
-		"LTL  •  LOOP",
-		7
+		"LTL • LOOP",
+		12
 	)
 
 local StopButton =
-	CreateButton(
+	CreateControlButton(
 		"Stop",
-		"STOP",
-		8
+		"STOP FORCE",
+		13
 	)
 
 --============================================================
@@ -1078,20 +1974,24 @@ Status.Text =
 	"READY"
 
 Status.TextColor3 =
-	Color3.fromRGB(150, 150, 150)
+	Color3.fromRGB(
+		150,
+		150,
+		150
+	)
 
-Status.TextSize = 11
+Status.TextSize = 10
 
 Status.Font =
 	Enum.Font.GothamBold
 
-Status.LayoutOrder = 9
+Status.LayoutOrder = 14
 
 Status.Parent =
 	Scroll
 
 --============================================================
--- GET LOCAL ROOT
+-- GET ROOT
 --============================================================
 
 local function GetRoot()
@@ -1110,7 +2010,7 @@ local function GetRoot()
 end
 
 --============================================================
--- SAVE START
+-- SAVE POSITION
 --============================================================
 
 local function SaveStartPosition()
@@ -1163,6 +2063,10 @@ end
 
 local function IsIgnoredTeam(Player)
 
+	if not Player then
+		return false
+	end
+
 	local Team =
 		Player.Team
 
@@ -1175,13 +2079,20 @@ local function IsIgnoredTeam(Player)
 end
 
 --============================================================
--- TARGET VALIDATION
+-- VALID TARGET
 --============================================================
 
 local function IsValidTarget(Player)
 
-	if Player == LocalPlayer then
+	if not Player then
 		return false
+	end
+
+	if Player ==
+		LocalPlayer then
+
+		return false
+
 	end
 
 	if not Player.Parent then
@@ -1225,6 +2136,51 @@ local function IsValidTarget(Player)
 end
 
 --============================================================
+-- TELEPORT POSITION
+--============================================================
+
+local function GetTargetCFrame(
+	TargetRoot
+)
+
+	if CONFIG.PositionMode ==
+		"Center" then
+
+		return TargetRoot.CFrame
+
+	end
+
+	if CONFIG.PositionMode ==
+		"Front" then
+
+		return
+			TargetRoot.CFrame *
+			CFrame.new(
+				0,
+				0,
+				-CONFIG.Distance
+			)
+
+	end
+
+	if CONFIG.PositionMode ==
+		"Back" then
+
+		return
+			TargetRoot.CFrame *
+			CFrame.new(
+				0,
+				0,
+				CONFIG.Distance
+			)
+
+	end
+
+	return TargetRoot.CFrame
+
+end
+
+--============================================================
 -- TELEPORT
 --============================================================
 
@@ -1254,22 +2210,17 @@ local function TeleportTo(Player)
 		return false
 	end
 
-	--========================================================
-	-- V6 FIX:
-	-- Tepat di posisi target.
-	-- Tidak lagi berada di depan target.
-	--========================================================
-
 	Root.CFrame =
-		TargetRoot.CFrame *
-		CONFIG.TargetOffset
+		GetTargetCFrame(
+			TargetRoot
+		)
 
 	return true
 
 end
 
 --============================================================
--- GET TARGETS
+-- TARGET LIST
 --============================================================
 
 local function GetTargets()
@@ -1299,7 +2250,17 @@ end
 -- DELAY
 --============================================================
 
-local function TeleportDelay()
+local function TeleportDelay(
+	Token
+)
+
+	if not Running then
+		return false
+	end
+
+	if Token ~= ActionToken then
+		return false
+	end
 
 	if CONFIG.TeleportDelay > 0 then
 
@@ -1313,18 +2274,34 @@ local function TeleportDelay()
 
 	end
 
+	if not Running then
+		return false
+	end
+
+	if Token ~= ActionToken then
+		return false
+	end
+
+	return true
+
 end
 
 --============================================================
--- RANDOM SHUFFLE
+-- SHUFFLE
 --============================================================
 
 local function Shuffle(Targets)
 
-	for i = #Targets, 2, -1 do
+	for i =
+		#Targets,
+		2,
+		-1 do
 
 		local j =
-			math.random(1, i)
+			math.random(
+				1,
+				i
+			)
 
 		Targets[i],
 		Targets[j] =
@@ -1336,10 +2313,73 @@ local function Shuffle(Targets)
 end
 
 --============================================================
+-- NORMAL
+--============================================================
+
+local function RunNormal(
+	Targets,
+	Token
+)
+
+	for _, Player in ipairs(
+		Targets
+	) do
+
+		if not Running
+			or Token ~= ActionToken then
+
+			return
+
+		end
+
+		if IsValidTarget(Player) then
+
+			TeleportTo(
+				Player
+			)
+
+			LastTarget =
+				Player
+
+			if not TeleportDelay(
+				Token
+			) then
+
+				return
+
+			end
+
+		end
+
+	end
+
+end
+
+--============================================================
+-- RANDOM
+--============================================================
+
+local function RunRandom(
+	Targets,
+	Token
+)
+
+	Shuffle(Targets)
+
+	RunNormal(
+		Targets,
+		Token
+	)
+
+end
+
+--============================================================
 -- NEAREST
 --============================================================
 
-local function GetNearestTarget(Targets)
+local function GetNearestTarget(
+	Targets
+)
 
 	local Root =
 		GetRoot()
@@ -1348,12 +2388,13 @@ local function GetNearestTarget(Targets)
 		return nil
 	end
 
-	local Nearest = nil
-
-	local NearestDistance =
+	local Best = nil
+	local BestDistance =
 		math.huge
 
-	for _, Player in ipairs(Targets) do
+	for _, Player in ipairs(
+		Targets
+	) do
 
 		if IsValidTarget(Player) then
 
@@ -1375,12 +2416,12 @@ local function GetNearestTarget(Targets)
 					).Magnitude
 
 				if Distance <
-					NearestDistance then
+					BestDistance then
 
-					NearestDistance =
+					BestDistance =
 						Distance
 
-					Nearest =
+					Best =
 						Player
 
 				end
@@ -1391,77 +2432,20 @@ local function GetNearestTarget(Targets)
 
 	end
 
-	return Nearest
+	return Best
 
 end
 
---============================================================
--- NORMAL
---============================================================
-
-local function RunNormal(Targets)
-
-	for _, Player in ipairs(Targets) do
-
-		if not Running then
-			break
-		end
-
-		if IsValidTarget(Player) then
-
-			TeleportTo(Player)
-
-			LastTarget =
-				Player
-
-			TeleportDelay()
-
-		end
-
-	end
-
-end
-
---============================================================
--- RANDOM
---============================================================
-
-local function RunRandom(Targets)
-
-	Shuffle(Targets)
-
-	for _, Player in ipairs(Targets) do
-
-		if not Running then
-			break
-		end
-
-		if IsValidTarget(Player) then
-
-			TeleportTo(Player)
-
-			LastTarget =
-				Player
-
-			TeleportDelay()
-
-		end
-
-	end
-
-end
-
---============================================================
--- NEAREST
---============================================================
-
-local function RunNearest()
+local function RunNearest(
+	Token
+)
 
 	local Remaining =
 		GetTargets()
 
-	while Running and
-		#Remaining > 0 do
+	while Running
+		and Token == ActionToken
+		and #Remaining > 0 do
 
 		local Target =
 			GetNearestTarget(
@@ -1472,14 +2456,18 @@ local function RunNearest()
 			break
 		end
 
-		if IsValidTarget(Target) then
+		TeleportTo(
+			Target
+		)
 
-			TeleportTo(Target)
+		LastTarget =
+			Target
 
-			LastTarget =
-				Target
+		if not TeleportDelay(
+			Token
+		) then
 
-			TeleportDelay()
+			break
 
 		end
 
@@ -1487,7 +2475,8 @@ local function RunNearest()
 			Remaining
 		) do
 
-			if Player == Target then
+			if Player ==
+				Target then
 
 				table.remove(
 					Remaining,
@@ -1506,7 +2495,6 @@ end
 
 --============================================================
 -- HUNTER
--- Target terjauh
 --============================================================
 
 local function GetFarthestTarget(
@@ -1520,10 +2508,8 @@ local function GetFarthestTarget(
 		return nil
 	end
 
-	local Farthest = nil
-
-	local FarthestDistance =
-		-1
+	local Best = nil
+	local BestDistance = -1
 
 	for _, Player in ipairs(
 		Targets
@@ -1549,12 +2535,12 @@ local function GetFarthestTarget(
 					).Magnitude
 
 				if Distance >
-					FarthestDistance then
+					BestDistance then
 
-					FarthestDistance =
+					BestDistance =
 						Distance
 
-					Farthest =
+					Best =
 						Player
 
 				end
@@ -1565,17 +2551,20 @@ local function GetFarthestTarget(
 
 	end
 
-	return Farthest
+	return Best
 
 end
 
-local function RunHunter()
+local function RunHunter(
+	Token
+)
 
 	local Remaining =
 		GetTargets()
 
-	while Running and
-		#Remaining > 0 do
+	while Running
+		and Token == ActionToken
+		and #Remaining > 0 do
 
 		local Target =
 			GetFarthestTarget(
@@ -1586,22 +2575,25 @@ local function RunHunter()
 			break
 		end
 
-		if IsValidTarget(Target) then
+		TeleportTo(
+			Target
+		)
 
-			TeleportTo(Target)
+		LastTarget =
+			Target
 
-			LastTarget =
-				Target
-
-			TeleportDelay()
-
+		if not TeleportDelay(
+			Token
+		) then
+			break
 		end
 
 		for i, Player in ipairs(
 			Remaining
 		) do
 
-			if Player == Target then
+			if Player ==
+				Target then
 
 				table.remove(
 					Remaining,
@@ -1619,45 +2611,62 @@ local function RunHunter()
 end
 
 --============================================================
--- PING-PONG
+-- PING PONG
 --============================================================
 
-local function RunPingPong()
+local function RunPingPong(
+	Token
+)
 
 	local Targets =
 		GetTargets()
+
+	table.sort(
+		Targets,
+		function(A,B)
+
+			return A.Name <
+				B.Name
+
+		end
+	)
 
 	if #Targets == 0 then
 		return
 	end
 
-	-- Urutkan berdasarkan nama
-	table.sort(
-		Targets,
-		function(A, B)
-			return A.Name < B.Name
-		end
-	)
-
 	if PingPongForward then
 
-		for i = 1, #Targets do
+		for i = 1,#Targets do
 
-			if not Running then
-				break
+			if not Running
+				or Token ~= ActionToken then
+
+				return
+
 			end
 
 			local Player =
 				Targets[i]
 
-			if IsValidTarget(Player) then
+			if IsValidTarget(
+				Player
+			) then
 
-				TeleportTo(Player)
+				TeleportTo(
+					Player
+				)
 
 				LastTarget =
 					Player
 
-				TeleportDelay()
+				if not TeleportDelay(
+					Token
+				) then
+
+					return
+
+				end
 
 			end
 
@@ -1665,23 +2674,39 @@ local function RunPingPong()
 
 	else
 
-		for i = #Targets, 1, -1 do
+		for i =
+			#Targets,
+			1,
+			-1 do
 
-			if not Running then
-				break
+			if not Running
+				or Token ~= ActionToken then
+
+				return
+
 			end
 
 			local Player =
 				Targets[i]
 
-			if IsValidTarget(Player) then
+			if IsValidTarget(
+				Player
+			) then
 
-				TeleportTo(Player)
+				TeleportTo(
+					Player
+				)
 
 				LastTarget =
 					Player
 
-				TeleportDelay()
+				if not TeleportDelay(
+					Token
+				) then
+
+					return
+
+				end
 
 			end
 
@@ -1695,11 +2720,12 @@ local function RunPingPong()
 end
 
 --============================================================
--- LOCK
+-- LOCK MODE
 --============================================================
 
 local function RunLockTarget(
-	Player
+	Player,
+	Token
 )
 
 	if not Player then
@@ -1713,24 +2739,22 @@ local function RunLockTarget(
 		return
 	end
 
-	Status.Text =
-		"LOCK: " ..
-		Player.Name
+	while Running
+		and Token == ActionToken do
 
-	while Running do
-
-		-- Player keluar
 		if not Player.Parent then
 			break
 		end
 
-		-- Team menjadi ignored
-		if IsIgnoredTeam(Player) then
+		if IsIgnoredTeam(
+			Player
+		) then
+
 			break
+
 		end
 
-		-- Character berubah
-		-- berarti target respawn
+		-- Target respawned
 		if Player.Character ~=
 			LockedCharacter then
 
@@ -1738,14 +2762,24 @@ local function RunLockTarget(
 
 		end
 
-		if IsValidTarget(Player) then
+		if IsValidTarget(
+			Player
+		) then
 
-			TeleportTo(Player)
+			TeleportTo(
+				Player
+			)
 
 			LastTarget =
 				Player
 
-			TeleportDelay()
+			if not TeleportDelay(
+				Token
+			) then
+
+				break
+
+			end
 
 		else
 
@@ -1757,8 +2791,34 @@ local function RunLockTarget(
 
 end
 
-local function RunLock()
+local function RunLock(
+	Token
+)
 
+	local Target =
+		LockedPlayer
+		or SelectedPlayer
+
+	if Target then
+
+		-- Kalau player sudah dipilih/locked,
+		-- jadikan dia prioritas pertama.
+		RunLockTarget(
+			Target,
+			Token
+		)
+
+	end
+
+	if not Running
+		or Token ~= ActionToken then
+
+		return
+
+	end
+
+	-- Setelah target locked respawn,
+	-- lanjut ke target lain.
 	local Targets =
 		GetTargets()
 
@@ -1766,14 +2826,19 @@ local function RunLock()
 		Targets
 	) do
 
-		if not Running then
-			break
+		if not Running
+			or Token ~= ActionToken then
+
+			return
+
 		end
 
-		if Player.Parent then
+		if Player ~=
+			Target then
 
 			RunLockTarget(
-				Player
+				Player,
+				Token
 			)
 
 		end
@@ -1786,7 +2851,9 @@ end
 -- SURVIVOR
 --============================================================
 
-local function RunSurvivor()
+local function RunSurvivor(
+	Token
+)
 
 	local Targets =
 		GetTargets()
@@ -1795,19 +2862,31 @@ local function RunSurvivor()
 		Targets
 	) do
 
-		if not Running then
-			break
+		if not Running
+			or Token ~= ActionToken then
+
+			return
+
 		end
 
-		-- Hanya target yang masih hidup
-		if IsValidTarget(Player) then
+		if IsValidTarget(
+			Player
+		) then
 
-			TeleportTo(Player)
+			TeleportTo(
+				Player
+			)
 
 			LastTarget =
 				Player
 
-			TeleportDelay()
+			if not TeleportDelay(
+				Token
+			) then
+
+				return
+
+			end
 
 		end
 
@@ -1816,27 +2895,30 @@ local function RunSurvivor()
 end
 
 --============================================================
--- LAST TARGET
+-- LAST
 --============================================================
 
-local function RunLast()
+local function RunLast(
+	Token
+)
 
-	-- Kalau target terakhir masih valid,
-	-- prioritaskan dia.
-	if LastTarget and
-		IsValidTarget(LastTarget) then
+	if LastTarget
+		and IsValidTarget(
+			LastTarget
+		) then
 
 		TeleportTo(
 			LastTarget
 		)
 
-		TeleportDelay()
+		TeleportDelay(
+			Token
+		)
 
 		return
+
 	end
 
-	-- Kalau target terakhir tidak valid,
-	-- cari target baru.
 	local Targets =
 		GetTargets()
 
@@ -1847,14 +2929,20 @@ local function RunLast()
 	local Target =
 		Targets[1]
 
-	if IsValidTarget(Target) then
+	if IsValidTarget(
+		Target
+	) then
 
-		TeleportTo(Target)
+		TeleportTo(
+			Target
+		)
 
 		LastTarget =
 			Target
 
-		TeleportDelay()
+		TeleportDelay(
+			Token
+		)
 
 	end
 
@@ -1864,67 +2952,89 @@ end
 -- CYCLE
 --============================================================
 
-local function RunCycle()
+local function RunCycle(
+	Token
+)
 
-	local Targets =
-		GetTargets()
-
-	if #Targets == 0 then
-		return
-	end
-
-	RunNormal(Targets)
+	RunNormal(
+		GetTargets(),
+		Token
+	)
 
 end
 
 --============================================================
--- RUN CURRENT MODE
+-- RUN MODE
 --============================================================
 
-local function RunPass()
+local function RunPass(
+	Token
+)
 
-	local Mode =
-		CONFIG.Mode
-
-	if Mode == "Normal" then
+	if CONFIG.Mode ==
+		"Normal" then
 
 		RunNormal(
-			GetTargets()
+			GetTargets(),
+			Token
 		)
 
-	elseif Mode == "Lock" then
+	elseif CONFIG.Mode ==
+		"Lock" then
 
-		RunLock()
+		RunLock(
+			Token
+		)
 
-	elseif Mode == "Random" then
+	elseif CONFIG.Mode ==
+		"Random" then
 
 		RunRandom(
-			GetTargets()
+			GetTargets(),
+			Token
 		)
 
-	elseif Mode == "Nearest" then
+	elseif CONFIG.Mode ==
+		"Nearest" then
 
-		RunNearest()
+		RunNearest(
+			Token
+		)
 
-	elseif Mode == "Cycle" then
+	elseif CONFIG.Mode ==
+		"Cycle" then
 
-		RunCycle()
+		RunCycle(
+			Token
+		)
 
-	elseif Mode == "Hunter" then
+	elseif CONFIG.Mode ==
+		"Hunter" then
 
-		RunHunter()
+		RunHunter(
+			Token
+		)
 
-	elseif Mode == "Ping-Pong" then
+	elseif CONFIG.Mode ==
+		"Ping-Pong" then
 
-		RunPingPong()
+		RunPingPong(
+			Token
+		)
 
-	elseif Mode == "Survivor" then
+	elseif CONFIG.Mode ==
+		"Survivor" then
 
-		RunSurvivor()
+		RunSurvivor(
+			Token
+		)
 
-	elseif Mode == "Last" then
+	elseif CONFIG.Mode ==
+		"Last" then
 
-		RunLast()
+		RunLast(
+			Token
+		)
 
 	end
 
@@ -1940,6 +3050,11 @@ local function RunTL()
 		return
 	end
 
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
 	Running = true
 	LoopMode = false
 
@@ -1948,23 +3063,37 @@ local function RunTL()
 	SaveStartPosition()
 
 	Status.Text =
-		"TL: " ..
+		"TL • " ..
 		string.upper(
 			CONFIG.Mode
 		)
 
-	RunPass()
+	RunPass(
+		Token
+	)
 
-	if Running then
+	if Running
+		and Token == ActionToken then
+
 		ReturnToStart()
+
 	end
 
-	Running = false
+	if Token ==
+		ActionToken then
+
+		Running = false
+
+	end
 
 	StartCFrame = nil
 
-	Status.Text =
-		"FINISHED"
+	if not Running then
+
+		Status.Text =
+			"FINISHED"
+
+	end
 
 end
 
@@ -1978,6 +3107,11 @@ local function RunLTL()
 		return
 	end
 
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
 	Running = true
 	LoopMode = true
 
@@ -1988,28 +3122,39 @@ local function RunLTL()
 	SaveStartPosition()
 
 	Status.Text =
-		"LTL: " ..
+		"LTL • " ..
 		string.upper(
 			CONFIG.Mode
 		)
 
-	while Running and
-		LoopMode do
+	while Running
+		and LoopMode
+		and Token == ActionToken do
 
-		RunPass()
+		RunPass(
+			Token
+		)
 
-		if not Running then
+		if not Running
+			or Token ~= ActionToken then
+
 			break
+
 		end
 
 		task.wait()
 
 	end
 
-	ReturnToStart()
+	if Token ==
+		ActionToken then
 
-	Running = false
-	LoopMode = false
+		ReturnToStart()
+
+		Running = false
+		LoopMode = false
+
+	end
 
 	StartCFrame = nil
 
@@ -2019,26 +3164,27 @@ local function RunLTL()
 end
 
 --============================================================
--- STOP
+-- STOP FORCE
 --============================================================
 
-local function Stop()
+local function StopForce()
 
-	if not Running then
-		return
-	end
+	-- Invalidate seluruh loop lama
+	ActionToken += 1
 
+	-- Matikan state
 	Running = false
 	LoopMode = false
 
+	-- Kembalikan posisi
 	ReturnToStart()
 
+	-- Reset
 	StartCFrame = nil
-
 	LastTarget = nil
 
 	Status.Text =
-		"STOPPED"
+		"STOP FORCE"
 
 end
 
@@ -2056,7 +3202,7 @@ MainButton.MouseButton1Click:Connect(
 )
 
 --============================================================
--- TL BUTTON
+-- TL
 --============================================================
 
 TLButton.MouseButton1Click:Connect(
@@ -2067,6 +3213,7 @@ TLButton.MouseButton1Click:Connect(
 		end
 
 		UpdateDelay()
+		UpdateDistance()
 
 		Menu.Visible = false
 
@@ -2078,7 +3225,7 @@ TLButton.MouseButton1Click:Connect(
 )
 
 --============================================================
--- LTL BUTTON
+-- LTL
 --============================================================
 
 LTLButton.MouseButton1Click:Connect(
@@ -2089,6 +3236,7 @@ LTLButton.MouseButton1Click:Connect(
 		end
 
 		UpdateDelay()
+		UpdateDistance()
 
 		Menu.Visible = false
 
@@ -2100,13 +3248,13 @@ LTLButton.MouseButton1Click:Connect(
 )
 
 --============================================================
--- STOP BUTTON
+-- STOP
 --============================================================
 
 StopButton.MouseButton1Click:Connect(
 	function()
 
-		Stop()
+		StopForce()
 
 		Menu.Visible = false
 
@@ -2114,7 +3262,7 @@ StopButton.MouseButton1Click:Connect(
 )
 
 --============================================================
--- LOCAL PLAYER RESPAWN
+-- PLAYER RESPAWN
 --============================================================
 
 LocalPlayer.CharacterAdded:Connect(
@@ -2129,31 +3277,28 @@ LocalPlayer.CharacterAdded:Connect(
 )
 
 --============================================================
--- OWN TEAM DEFAULT IGNORE
+-- SELECTED PLAYER CHARACTER UPDATE
 --============================================================
 
-if LocalPlayer.Team then
+Players.PlayerAdded:Connect(
+	function(Player)
 
-	IgnoredTeams[
-		LocalPlayer.Team
-	] = true
+		Player.CharacterAdded:Connect(
+			function()
 
-end
+				if SelectedPlayer ==
+					Player then
 
-LocalPlayer:GetPropertyChangedSignal(
-	"Team"
-):Connect(
-	function()
+					task.wait()
 
-		if LocalPlayer.Team then
+					HighlightPlayer(
+						Player
+					)
 
-			IgnoredTeams[
-				LocalPlayer.Team
-			] = true
+				end
 
-		end
-
-		RefreshTeams()
+			end
+		)
 
 	end
 )
@@ -2163,5 +3308,5 @@ LocalPlayer:GetPropertyChangedSignal(
 --============================================================
 
 print(
-	"TL/LTL V6 loaded successfully."
+	"TL/LTL V6.1 loaded successfully."
 )
