@@ -1,0 +1,4757 @@
+--[[
+============================================================
+ TL / LTL TELEPORT SYSTEM V7.3
+ FULL REPLACEMENT • PASTE READY
+============================================================
+
+V7.3 CLICK TARGET IMPROVEMENT
+• Mouse Target detection
+• TouchTap detection
+• Multi-ray fallback
+• Better accessory detection
+• Better body-part detection
+• Ignore Team does NOT block Click Target
+• UI clicks are ignored
+• Mobile + PC
+
+FEATURES
+• TL ONCE
+• LTL LOOP
+• NORMAL TP • NO RETURN
+• STOP FORCE
+• Target Player
+• Lock Selected Player
+• Click Target
+• Ignore Team
+• Normal
+• Lock
+• Random
+• Nearest
+• Cycle
+• Hunter
+• Ping-Pong
+• Survivor
+• Last
+• Center / Front / Back
+• Delay
+• Distance
+• Return To Start
+• Draggable menu
+• Draggable TL button
+• Scrollable UI
+• Rainbow target highlight
+============================================================
+]]
+
+------------------------------------------------------------
+-- SERVICES
+------------------------------------------------------------
+
+local Players = game:GetService("Players")
+local Teams = game:GetService("Teams")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local GuiService = game:GetService("GuiService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+------------------------------------------------------------
+-- MOUSE
+------------------------------------------------------------
+
+local Mouse = LocalPlayer:GetMouse()
+
+------------------------------------------------------------
+-- CONFIG
+------------------------------------------------------------
+
+local CONFIG = {
+	TeleportDelay = 0.2,
+
+	PositionMode = "Center",
+
+	Distance = 2,
+
+	ReturnToStart = true,
+
+	MaxDelay = 10,
+
+	MaxDistance = 500,
+
+	Mode = "Normal",
+
+	ClickTarget = false,
+}
+
+local MODES = {
+	"Normal",
+	"Lock",
+	"Random",
+	"Nearest",
+	"Cycle",
+	"Hunter",
+	"Ping-Pong",
+	"Survivor",
+	"Last",
+}
+
+local POSITION_MODES = {
+	"Center",
+	"Front",
+	"Back",
+}
+
+------------------------------------------------------------
+-- STATE
+------------------------------------------------------------
+
+local Running = false
+local LoopMode = false
+
+local StartCFrame = nil
+
+local SelectedPlayer = nil
+local LockedPlayer = nil
+
+local IgnoredTeams = {}
+local TeamInitialized = false
+
+local LastTarget = nil
+
+local PingPongForward = true
+local CycleIndex = 1
+
+local ActionToken = 0
+
+local TargetExpanded = true
+local TeamExpanded = true
+
+local SelectedHighlight = nil
+
+local CurrentActionReturns = false
+
+------------------------------------------------------------
+-- GUI
+------------------------------------------------------------
+
+local oldGui =
+	PlayerGui:FindFirstChild(
+		"TL_LTL_GUI_V7_3"
+	)
+
+if oldGui then
+	oldGui:Destroy()
+end
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "TL_LTL_GUI_V7_3"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior =
+	Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+------------------------------------------------------------
+-- HELPERS
+------------------------------------------------------------
+
+local function New(
+	className,
+	properties,
+	parent
+)
+
+	local obj =
+		Instance.new(className)
+
+	for property, value in pairs(
+		properties or {}
+	) do
+
+		obj[property] = value
+	end
+
+	obj.Parent = parent
+
+	return obj
+end
+
+local function AddCorner(
+	object,
+	radius
+)
+
+	local corner =
+		Instance.new("UICorner")
+
+	corner.CornerRadius =
+		UDim.new(
+			0,
+			radius or 6
+		)
+
+	corner.Parent = object
+
+	return corner
+end
+
+local function AddStroke(
+	object,
+	thickness,
+	transparency
+)
+
+	local stroke =
+		Instance.new("UIStroke")
+
+	stroke.Thickness =
+		thickness or 1
+
+	stroke.Transparency =
+		transparency or 0
+
+	stroke.Parent = object
+
+	return stroke
+end
+
+------------------------------------------------------------
+-- MAIN BUTTON
+------------------------------------------------------------
+
+local MainButton = New(
+	"TextButton",
+	{
+
+		Name = "MainButton",
+
+		Size =
+			UDim2.fromOffset(
+				58,
+				58
+			),
+
+		Position =
+			UDim2.new(
+				0.5,
+				-29,
+				0.5,
+				-29
+			),
+
+		BackgroundColor3 =
+			Color3.fromRGB(
+				55,
+				55,
+				55
+			),
+
+		BackgroundTransparency = 0.1,
+
+		Text = "TL",
+
+		TextColor3 =
+			Color3.new(
+				1,
+				1,
+				1
+			),
+
+		TextSize = 20,
+
+		Font =
+			Enum.Font.GothamBold,
+
+		AutoButtonColor = true,
+
+		Active = true,
+
+		ZIndex = 20,
+
+	},
+	ScreenGui
+)
+
+AddCorner(
+	MainButton,
+	999
+)
+
+AddStroke(
+	MainButton,
+	1.5,
+	0
+)
+
+------------------------------------------------------------
+-- MENU
+------------------------------------------------------------
+
+local Menu = New(
+	"Frame",
+	{
+
+		Name = "Menu",
+
+		Size =
+			UDim2.fromOffset(
+				220,
+				285
+			),
+
+		Position =
+			UDim2.new(
+				0.5,
+				-110,
+				0.5,
+				-142
+			),
+
+		BackgroundColor3 =
+			Color3.fromRGB(
+				25,
+				25,
+				25
+			),
+
+		BackgroundTransparency = 0.05,
+
+		Visible = false,
+
+		Active = true,
+
+		ZIndex = 10,
+
+	},
+	ScreenGui
+)
+
+AddCorner(
+	Menu,
+	8
+)
+
+AddStroke(
+	Menu,
+	1.5,
+	0.1
+)
+
+------------------------------------------------------------
+-- HEADER
+------------------------------------------------------------
+
+local Header = New(
+	"Frame",
+	{
+
+		Name = "Header",
+
+		Size =
+			UDim2.new(
+				1,
+				0,
+				0,
+				38
+			),
+
+		BackgroundColor3 =
+			Color3.fromRGB(
+				35,
+				35,
+				35
+			),
+
+		BorderSizePixel = 0,
+
+		Active = true,
+
+		ZIndex = 11,
+
+	},
+	Menu
+)
+
+AddCorner(
+	Header,
+	8
+)
+
+------------------------------------------------------------
+-- HEADER DRAG AREA
+------------------------------------------------------------
+
+local HeaderDragArea = New(
+	"Frame",
+	{
+
+		Name = "HeaderDragArea",
+
+		Size =
+			UDim2.new(
+				1,
+				-38,
+				1,
+				0
+			),
+
+		BackgroundTransparency = 1,
+
+		Active = true,
+
+		ZIndex = 12,
+
+	},
+	Header
+)
+
+local HeaderTitle = New(
+	"TextLabel",
+	{
+
+		Name = "HeaderTitle",
+
+		Position =
+			UDim2.fromOffset(
+				10,
+				0
+			),
+
+		Size =
+			UDim2.new(
+				1,
+				-10,
+				1,
+				0
+			),
+
+		BackgroundTransparency = 1,
+
+		Text = "TL / LTL  V7.3",
+
+		TextColor3 =
+			Color3.fromRGB(
+				235,
+				235,
+				235
+			),
+
+		TextSize = 14,
+
+		Font =
+			Enum.Font.GothamBold,
+
+		TextXAlignment =
+			Enum.TextXAlignment.Left,
+
+		ZIndex = 13,
+
+	},
+	HeaderDragArea
+)
+
+------------------------------------------------------------
+-- CLOSE
+------------------------------------------------------------
+
+local CloseButton = New(
+	"TextButton",
+	{
+
+		Name = "CloseButton",
+
+		Position =
+			UDim2.new(
+				1,
+				-34,
+				0,
+				6
+			),
+
+		Size =
+			UDim2.fromOffset(
+				26,
+				26
+			),
+
+		BackgroundColor3 =
+			Color3.fromRGB(
+				60,
+				60,
+				60
+			),
+
+		Text = "X",
+
+		TextColor3 =
+			Color3.new(
+				1,
+				1,
+				1
+			),
+
+		TextSize = 12,
+
+		Font =
+			Enum.Font.GothamBold,
+
+		ZIndex = 14,
+
+	},
+	Header
+)
+
+AddCorner(
+	CloseButton,
+	6
+)
+
+------------------------------------------------------------
+-- MAIN SCROLL
+------------------------------------------------------------
+
+local MainScroll = New(
+	"ScrollingFrame",
+	{
+
+		Name = "MainScroll",
+
+		Position =
+			UDim2.fromOffset(
+				5,
+				43
+			),
+
+		Size =
+			UDim2.new(
+				1,
+				-10,
+				1,
+				-48
+			),
+
+		BackgroundTransparency = 1,
+
+		BorderSizePixel = 0,
+
+		ScrollBarThickness = 4,
+
+		ScrollingDirection =
+			Enum.ScrollingDirection.Y,
+
+		CanvasSize =
+			UDim2.new(
+				0,
+				0,
+				0,
+				0
+			),
+
+		AutomaticCanvasSize =
+			Enum.AutomaticSize.Y,
+
+		Active = true,
+
+		ZIndex = 11,
+
+	},
+	Menu
+)
+
+New(
+	"UIPadding",
+	{
+
+		PaddingTop =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingBottom =
+			UDim.new(
+				0,
+				8
+			),
+
+		PaddingLeft =
+			UDim.new(
+				0,
+				2
+			),
+
+		PaddingRight =
+			UDim.new(
+				0,
+				2
+			),
+
+	},
+	MainScroll
+)
+
+New(
+	"UIListLayout",
+	{
+
+		FillDirection =
+			Enum.FillDirection.Vertical,
+
+		HorizontalAlignment =
+			Enum.HorizontalAlignment.Center,
+
+		Padding =
+			UDim.new(
+				0,
+				5
+			),
+
+		SortOrder =
+			Enum.SortOrder.LayoutOrder,
+
+	},
+	MainScroll
+)
+
+------------------------------------------------------------
+-- STATUS
+------------------------------------------------------------
+
+local Status = New(
+	"TextLabel",
+	{
+
+		Name = "Status",
+
+		Size =
+			UDim2.new(
+				1,
+				-10,
+				0,
+				28
+			),
+
+		BackgroundColor3 =
+			Color3.fromRGB(
+				32,
+				32,
+				32
+			),
+
+		Text =
+			"Status: READY",
+
+		TextColor3 =
+			Color3.fromRGB(
+				180,
+				255,
+				180
+			),
+
+		TextSize = 11,
+
+		Font =
+			Enum.Font.Gotham,
+
+		TextWrapped = true,
+
+		LayoutOrder = 1,
+
+		ZIndex = 12,
+
+	},
+	MainScroll
+)
+
+AddCorner(
+	Status,
+	5
+)
+
+------------------------------------------------------------
+-- BUTTON HELPER
+------------------------------------------------------------
+
+local function CreateButton(
+	name,
+	text,
+	height,
+	layoutOrder
+)
+
+	local button = New(
+		"TextButton",
+		{
+
+			Name = name,
+
+			Size =
+				UDim2.new(
+					1,
+					-10,
+					0,
+					height or 34
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					48,
+					48,
+					48
+				),
+
+			Text = text,
+
+			TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				),
+
+			TextSize = 12,
+
+			Font =
+				Enum.Font.GothamBold,
+
+			LayoutOrder =
+				layoutOrder or 1,
+
+			AutoButtonColor = true,
+
+			ZIndex = 12,
+
+		},
+		MainScroll
+	)
+
+	AddCorner(
+		button,
+		6
+	)
+
+	return button
+end
+
+------------------------------------------------------------
+-- TARGET HEADER
+------------------------------------------------------------
+
+local TargetHeader =
+	CreateButton(
+		"TargetHeader",
+		"▼  Target Player",
+		32,
+		10
+	)
+
+------------------------------------------------------------
+-- TARGET CONTAINER
+------------------------------------------------------------
+
+local TargetContainer =
+	New(
+		"Frame",
+		{
+
+			Name =
+				"TargetContainer",
+
+			Size =
+				UDim2.new(
+					1,
+					-10,
+					0,
+					215
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					31,
+					31,
+					31
+				),
+
+			LayoutOrder = 11,
+
+			ClipsDescendants = true,
+
+			ZIndex = 12,
+
+		},
+		MainScroll
+	)
+
+AddCorner(
+	TargetContainer,
+	6
+)
+
+------------------------------------------------------------
+-- TARGET INFO
+------------------------------------------------------------
+
+local TargetInfo =
+	New(
+		"TextLabel",
+		{
+
+			Name = "TargetInfo",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					6
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					0,
+					28
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					42,
+					42,
+					42
+				),
+
+			Text =
+				"Selected: NONE",
+
+			TextColor3 =
+				Color3.fromRGB(
+					220,
+					220,
+					220
+				),
+
+			TextSize = 10,
+
+			Font =
+				Enum.Font.Gotham,
+
+			TextXAlignment =
+				Enum.TextXAlignment.Left,
+
+			ZIndex = 13,
+
+		},
+		TargetContainer
+	)
+
+AddCorner(
+	TargetInfo,
+	4
+)
+
+------------------------------------------------------------
+-- PLAYER LIST
+------------------------------------------------------------
+
+local PlayerList =
+	New(
+		"ScrollingFrame",
+		{
+
+			Name = "PlayerList",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					39
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					0,
+					100
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					24,
+					24,
+					24
+				),
+
+			BorderSizePixel = 0,
+
+			ScrollBarThickness = 3,
+
+			CanvasSize =
+				UDim2.new(
+					0,
+					0,
+					0,
+					0
+				),
+
+			AutomaticCanvasSize =
+				Enum.AutomaticSize.Y,
+
+			ScrollingDirection =
+				Enum.ScrollingDirection.Y,
+
+			Active = true,
+
+			ZIndex = 13,
+
+		},
+		TargetContainer
+	)
+
+AddCorner(
+	PlayerList,
+	4
+)
+
+New(
+	"UIListLayout",
+	{
+
+		Padding =
+			UDim.new(
+				0,
+				3
+			),
+
+		SortOrder =
+			Enum.SortOrder.LayoutOrder,
+
+	},
+	PlayerList
+)
+
+New(
+	"UIPadding",
+	{
+
+		PaddingTop =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingBottom =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingLeft =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingRight =
+			UDim.new(
+				0,
+				4
+			),
+
+	},
+	PlayerList
+)
+
+------------------------------------------------------------
+-- REFRESH PLAYERS
+------------------------------------------------------------
+
+local RefreshPlayers =
+	New(
+		"TextButton",
+		{
+
+			Name =
+				"RefreshPlayers",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					144
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					0,
+					18
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					55,
+					55,
+					55
+				),
+
+			Text =
+				"Refresh Players",
+
+			TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				),
+
+			TextSize = 10,
+
+			Font =
+				Enum.Font.GothamBold,
+
+			ZIndex = 13,
+
+		},
+		TargetContainer
+	)
+
+AddCorner(
+	RefreshPlayers,
+	4
+)
+
+------------------------------------------------------------
+-- LOCK
+------------------------------------------------------------
+
+local LockSelected =
+	New(
+		"TextButton",
+		{
+
+			Name =
+				"LockSelected",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					165
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					0,
+					18
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					65,
+					65,
+					65
+				),
+
+			Text =
+				"Lock Selected Player",
+
+			TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				),
+
+			TextSize = 10,
+
+			Font =
+				Enum.Font.GothamBold,
+
+			ZIndex = 13,
+
+		},
+		TargetContainer
+	)
+
+AddCorner(
+	LockSelected,
+	4
+)
+
+------------------------------------------------------------
+-- CLICK TARGET
+------------------------------------------------------------
+
+local ClickTargetButton =
+	New(
+		"TextButton",
+		{
+
+			Name =
+				"ClickTargetButton",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					187
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					0,
+					22
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					42,
+					42,
+					42
+				),
+
+			Text = "",
+
+			AutoButtonColor = true,
+
+			ZIndex = 13,
+
+		},
+		TargetContainer
+	)
+
+AddCorner(
+	ClickTargetButton,
+	4
+)
+
+local ClickTargetBox =
+	New(
+		"Frame",
+		{
+
+			Name =
+				"ClickTargetBox",
+
+			Position =
+				UDim2.fromOffset(
+					5,
+					4
+				),
+
+			Size =
+				UDim2.fromOffset(
+					14,
+					14
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					25,
+					25,
+					25
+				),
+
+			ZIndex = 14,
+
+		},
+		ClickTargetButton
+	)
+
+AddCorner(
+	ClickTargetBox,
+	3
+)
+
+AddStroke(
+	ClickTargetBox,
+	1,
+	0
+)
+
+local ClickTargetCheck =
+	New(
+		"TextLabel",
+		{
+
+			Name = "Check",
+
+			Size =
+				UDim2.fromScale(
+					1,
+					1
+				),
+
+			BackgroundTransparency = 1,
+
+			Text = "",
+
+			TextColor3 =
+				Color3.fromRGB(
+					170,
+					255,
+					170
+				),
+
+			TextSize = 12,
+
+			Font =
+				Enum.Font.GothamBold,
+
+			ZIndex = 15,
+
+		},
+		ClickTargetBox
+	)
+
+local ClickTargetLabel =
+	New(
+		"TextLabel",
+		{
+
+			Name = "Label",
+
+			Position =
+				UDim2.fromOffset(
+					25,
+					0
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-30,
+					1,
+					0
+				),
+
+			BackgroundTransparency = 1,
+
+			Text =
+				"Click Target: OFF",
+
+			TextColor3 =
+				Color3.fromRGB(
+					220,
+					220,
+					220
+				),
+
+			TextSize = 10,
+
+			Font =
+				Enum.Font.GothamBold,
+
+			TextXAlignment =
+				Enum.TextXAlignment.Left,
+
+			ZIndex = 14,
+
+		},
+		ClickTargetButton
+	)
+
+------------------------------------------------------------
+-- CLICK TARGET UI
+------------------------------------------------------------
+
+local function UpdateClickTargetUI()
+
+	if CONFIG.ClickTarget then
+
+		ClickTargetCheck.Text =
+			"✓"
+
+		ClickTargetBox.BackgroundColor3 =
+			Color3.fromRGB(
+				55,
+				90,
+				55
+			)
+
+		ClickTargetLabel.Text =
+			"Click Target: ON"
+
+	else
+
+		ClickTargetCheck.Text =
+			""
+
+		ClickTargetBox.BackgroundColor3 =
+			Color3.fromRGB(
+				25,
+				25,
+				25
+			)
+
+		ClickTargetLabel.Text =
+			"Click Target: OFF"
+	end
+end
+
+------------------------------------------------------------
+-- TEAM HEADER
+------------------------------------------------------------
+
+local TeamHeader =
+	CreateButton(
+		"TeamHeader",
+		"▼  Ignore Team",
+		32,
+		20
+	)
+
+------------------------------------------------------------
+-- TEAM CONTAINER
+------------------------------------------------------------
+
+local TeamContainer =
+	New(
+		"Frame",
+		{
+
+			Name =
+				"TeamContainer",
+
+			Size =
+				UDim2.new(
+					1,
+					-10,
+					0,
+					125
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					31,
+					31,
+					31
+				),
+
+			LayoutOrder = 21,
+
+			ClipsDescendants = true,
+
+			ZIndex = 12,
+
+		},
+		MainScroll
+	)
+
+AddCorner(
+	TeamContainer,
+	6
+)
+
+------------------------------------------------------------
+-- TEAM LIST
+------------------------------------------------------------
+
+local TeamList =
+	New(
+		"ScrollingFrame",
+		{
+
+			Name = "TeamList",
+
+			Position =
+				UDim2.fromOffset(
+					6,
+					6
+				),
+
+			Size =
+				UDim2.new(
+					1,
+					-12,
+					1,
+					-12
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					24,
+					24,
+					24
+				),
+
+			BorderSizePixel = 0,
+
+			ScrollBarThickness = 3,
+
+			CanvasSize =
+				UDim2.new(
+					0,
+					0,
+					0,
+					0
+				),
+
+			AutomaticCanvasSize =
+				Enum.AutomaticSize.Y,
+
+			ScrollingDirection =
+				Enum.ScrollingDirection.Y,
+
+			Active = true,
+
+			ZIndex = 13,
+
+		},
+		TeamContainer
+	)
+
+AddCorner(
+	TeamList,
+	4
+)
+
+New(
+	"UIListLayout",
+	{
+
+		Padding =
+			UDim.new(
+				0,
+				3
+			),
+
+		SortOrder =
+			Enum.SortOrder.LayoutOrder,
+
+	},
+	TeamList
+)
+
+New(
+	"UIPadding",
+	{
+
+		PaddingTop =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingBottom =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingLeft =
+			UDim.new(
+				0,
+				4
+			),
+
+		PaddingRight =
+			UDim.new(
+				0,
+				4
+			),
+
+	},
+	TeamList
+)
+
+------------------------------------------------------------
+-- SETTINGS
+------------------------------------------------------------
+
+local ModeButton =
+	CreateButton(
+		"ModeButton",
+		"Mode: Normal",
+		32,
+		30
+	)
+
+local PositionButton =
+	CreateButton(
+		"PositionButton",
+		"Position: Center",
+		32,
+		31
+	)
+
+local DelayBox =
+	New(
+		"TextBox",
+		{
+
+			Name = "DelayBox",
+
+			Size =
+				UDim2.new(
+					1,
+					-10,
+					0,
+					30
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					42,
+					42,
+					42
+				),
+
+			Text =
+				tostring(
+					CONFIG.TeleportDelay
+				),
+
+			PlaceholderText =
+				"Teleport Delay",
+
+			TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				),
+
+			PlaceholderColor3 =
+				Color3.fromRGB(
+					150,
+					150,
+					150
+				),
+
+			TextSize = 11,
+
+			Font =
+				Enum.Font.Gotham,
+
+			ClearTextOnFocus = false,
+
+			LayoutOrder = 32,
+
+			ZIndex = 12,
+
+		},
+		MainScroll
+	)
+
+AddCorner(
+	DelayBox,
+	5
+)
+
+local DistanceBox =
+	New(
+		"TextBox",
+		{
+
+			Name = "DistanceBox",
+
+			Size =
+				UDim2.new(
+					1,
+					-10,
+					0,
+					30
+				),
+
+			BackgroundColor3 =
+				Color3.fromRGB(
+					42,
+					42,
+					42
+				),
+
+			Text =
+				tostring(
+					CONFIG.Distance
+				),
+
+			PlaceholderText =
+				"Distance",
+
+			TextColor3 =
+				Color3.new(
+					1,
+					1,
+					1
+				),
+
+			PlaceholderColor3 =
+				Color3.fromRGB(
+					150,
+					150,
+					150
+				),
+
+			TextSize = 11,
+
+			Font =
+				Enum.Font.Gotham,
+
+			ClearTextOnFocus = false,
+
+			LayoutOrder = 33,
+
+			ZIndex = 12,
+
+		},
+		MainScroll
+	)
+
+AddCorner(
+	DistanceBox,
+	5
+)
+
+local ReturnButton =
+	CreateButton(
+		"ReturnButton",
+		"Return To Start: ON",
+		30,
+		34
+	)
+
+------------------------------------------------------------
+-- EXECUTION
+------------------------------------------------------------
+
+local NormalTPButton =
+	CreateButton(
+		"NormalTP",
+		"NORMAL TP • NO RETURN",
+		38,
+		40
+	)
+
+AddStroke(
+	NormalTPButton,
+	1.2,
+	0.2
+)
+
+local TLButton =
+	CreateButton(
+		"TLButton",
+		"TL ONCE",
+		38,
+		41
+	)
+
+local LTLButton =
+	CreateButton(
+		"LTLButton",
+		"LTL LOOP",
+		38,
+		42
+	)
+
+local StopButton =
+	CreateButton(
+		"StopButton",
+		"STOP FORCE",
+		38,
+		43
+	)
+
+------------------------------------------------------------
+-- TEAM INITIALIZATION
+------------------------------------------------------------
+
+local function InitializeTeamIgnore()
+
+	if TeamInitialized then
+		return
+	end
+
+	if LocalPlayer.Team then
+
+		IgnoredTeams[
+			LocalPlayer.Team
+		] = true
+
+	end
+
+	TeamInitialized = true
+end
+
+InitializeTeamIgnore()
+
+------------------------------------------------------------
+-- CHARACTER ROOT
+------------------------------------------------------------
+
+local function GetCharacterRoot(
+	player
+)
+
+	if not player then
+		return nil
+	end
+
+	local character =
+		player.Character
+
+	if not character then
+		return nil
+	end
+
+	local humanoid =
+		character:FindFirstChildOfClass(
+			"Humanoid"
+		)
+
+	local root =
+		character:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not humanoid
+		or not root then
+
+		return nil
+	end
+
+	if humanoid.Health <= 0 then
+		return nil
+	end
+
+	return root
+end
+
+------------------------------------------------------------
+-- VALID TARGET
+------------------------------------------------------------
+
+local function IsValidTarget(
+	player
+)
+
+	if not player then
+		return false
+	end
+
+	if player == LocalPlayer then
+		return false
+	end
+
+	if IgnoredTeams[
+		player.Team
+	] then
+
+		return false
+	end
+
+	return GetCharacterRoot(
+		player
+	) ~= nil
+end
+
+------------------------------------------------------------
+-- CLICK SELECTABLE
+------------------------------------------------------------
+
+local function IsSelectableByClick(
+	player
+)
+
+	if not player then
+		return false
+	end
+
+	if player == LocalPlayer then
+		return false
+	end
+
+	return GetCharacterRoot(
+		player
+	) ~= nil
+end
+
+------------------------------------------------------------
+-- TARGETS
+------------------------------------------------------------
+
+local function GetTargets()
+
+	local result = {}
+
+	for _, player in ipairs(
+		Players:GetPlayers()
+	) do
+
+		if IsValidTarget(
+			player
+		) then
+
+			table.insert(
+				result,
+				player
+			)
+		end
+	end
+
+	return result
+end
+
+------------------------------------------------------------
+-- SORT
+------------------------------------------------------------
+
+local function SortAlphabetical(
+	list
+)
+
+	table.sort(
+		list,
+		function(a, b)
+
+			return string.lower(
+				a.Name
+			)
+			<
+			string.lower(
+				b.Name
+			)
+
+		end
+	)
+
+	return list
+end
+
+------------------------------------------------------------
+-- TARGET CFRAME
+------------------------------------------------------------
+
+local function GetTargetCFrame(
+	player
+)
+
+	local root =
+		GetCharacterRoot(
+			player
+		)
+
+	if not root then
+		return nil
+	end
+
+	if CONFIG.PositionMode
+		== "Front" then
+
+		return root.CFrame *
+			CFrame.new(
+				0,
+				0,
+				-CONFIG.Distance
+			)
+	end
+
+	if CONFIG.PositionMode
+		== "Back" then
+
+		return root.CFrame *
+			CFrame.new(
+				0,
+				0,
+				CONFIG.Distance
+			)
+	end
+
+	return root.CFrame
+end
+
+------------------------------------------------------------
+-- TELEPORT
+------------------------------------------------------------
+
+local function TeleportTo(
+	player
+)
+
+	if not IsValidTarget(
+		player
+	) then
+
+		return false
+	end
+
+	local localRoot =
+		GetCharacterRoot(
+			LocalPlayer
+		)
+
+	if not localRoot then
+		return false
+	end
+
+	local targetCFrame =
+		GetTargetCFrame(
+			player
+		)
+
+	if not targetCFrame then
+		return false
+	end
+
+	localRoot.CFrame =
+		targetCFrame
+
+	LastTarget =
+		player
+
+	return true
+end
+
+------------------------------------------------------------
+-- START / RETURN
+------------------------------------------------------------
+
+local function SaveStartPosition()
+
+	local root =
+		GetCharacterRoot(
+			LocalPlayer
+		)
+
+	if root then
+		StartCFrame =
+			root.CFrame
+	end
+end
+
+local function ReturnToStart()
+
+	if not StartCFrame then
+		return
+	end
+
+	local root =
+		GetCharacterRoot(
+			LocalPlayer
+		)
+
+	if root then
+		root.CFrame =
+			StartCFrame
+	end
+end
+
+------------------------------------------------------------
+-- DELAY
+------------------------------------------------------------
+
+local function TeleportDelay(
+	token
+)
+
+	if not Running then
+		return false
+	end
+
+	if token ~= ActionToken then
+		return false
+	end
+
+	local delayTime =
+		math.clamp(
+			tonumber(
+				CONFIG.TeleportDelay
+			) or 0,
+			0,
+			CONFIG.MaxDelay
+		)
+
+	if delayTime > 0 then
+		task.wait(
+			delayTime
+		)
+	end
+
+	return Running
+		and token == ActionToken
+end
+
+------------------------------------------------------------
+-- HIGHLIGHT
+------------------------------------------------------------
+
+local function RemoveHighlight()
+
+	if SelectedHighlight then
+
+		SelectedHighlight:Destroy()
+
+		SelectedHighlight = nil
+	end
+end
+
+local function ApplyHighlight()
+
+	RemoveHighlight()
+
+	if not SelectedPlayer then
+		return
+	end
+
+	local character =
+		SelectedPlayer.Character
+
+	if not character then
+		return
+	end
+
+	local highlight =
+		Instance.new(
+			"Highlight"
+		)
+
+	highlight.Name =
+		"TL_V7_3_SELECTED_HIGHLIGHT"
+
+	highlight.Adornee =
+		character
+
+	highlight.DepthMode =
+		Enum.HighlightDepthMode.AlwaysOnTop
+
+	highlight.FillTransparency =
+		0.8
+
+	highlight.OutlineTransparency =
+		0
+
+	highlight.Parent =
+		workspace
+
+	SelectedHighlight =
+		highlight
+end
+
+------------------------------------------------------------
+-- RAINBOW
+------------------------------------------------------------
+
+RunService.RenderStepped:Connect(
+	function()
+
+		if not SelectedHighlight then
+			return
+		end
+
+		if not SelectedHighlight.Parent then
+
+			SelectedHighlight =
+				nil
+
+			return
+		end
+
+		local hue =
+			(os.clock() * 0.25)
+			% 1
+
+		SelectedHighlight.FillColor =
+			Color3.fromHSV(
+				hue,
+				1,
+				1
+			)
+
+		SelectedHighlight.OutlineColor =
+			Color3.fromHSV(
+				(hue + 0.2)
+				% 1,
+				1,
+				1
+			)
+
+		if SelectedPlayer
+			and SelectedPlayer.Character then
+
+			SelectedHighlight.Adornee =
+				SelectedPlayer.Character
+		end
+	end
+)
+
+------------------------------------------------------------
+-- TARGET INFO
+------------------------------------------------------------
+
+local function UpdateTargetInfo()
+
+	local selectedName =
+		SelectedPlayer
+		and SelectedPlayer.Name
+		or "NONE"
+
+	local lockedName =
+		LockedPlayer
+		and LockedPlayer.Name
+		or "NONE"
+
+	TargetInfo.Text =
+		"Selected: "
+		.. selectedName
+		.. "   |   Lock: "
+		.. lockedName
+
+	if LockedPlayer then
+
+		LockSelected.Text =
+			"Unlock Locked Player"
+
+	else
+
+		LockSelected.Text =
+			"Lock Selected Player"
+	end
+end
+
+------------------------------------------------------------
+-- SELECT PLAYER
+------------------------------------------------------------
+
+local function SelectPlayer(
+	player,
+	source
+)
+
+	if not IsSelectableByClick(
+		player
+	) then
+
+		return false
+	end
+
+	SelectedPlayer =
+		player
+
+	ApplyHighlight()
+
+	UpdateTargetInfo()
+
+	RefreshPlayerList()
+
+	if source == "Click" then
+
+		Status.Text =
+			"Status: CLICK TARGET → "
+			.. player.Name
+
+	else
+
+		Status.Text =
+			"Status: SELECTED → "
+			.. player.Name
+	end
+
+	return true
+end
+
+------------------------------------------------------------
+-- PLAYER LIST
+------------------------------------------------------------
+
+function RefreshPlayerList()
+
+	for _, child in ipairs(
+		PlayerList:GetChildren()
+	) do
+
+		if child:IsA(
+			"TextButton"
+		) then
+
+			child:Destroy()
+
+		end
+	end
+
+	local list =
+		Players:GetPlayers()
+
+	SortAlphabetical(
+		list
+	)
+
+	local order = 0
+
+	for _, player in ipairs(
+		list
+	) do
+
+		if player ~= LocalPlayer then
+
+			order += 1
+
+			local teamName =
+				player.Team
+				and player.Team.Name
+				or "No Team"
+
+			local button =
+				New(
+					"TextButton",
+					{
+
+						Name =
+							"Player_"
+							.. player.UserId,
+
+						Size =
+							UDim2.new(
+								1,
+								0,
+								0,
+								25
+							),
+
+						BackgroundColor3 =
+							player
+							== SelectedPlayer
+							and
+							Color3.fromRGB(
+								75,
+								75,
+								75
+							)
+							or
+							Color3.fromRGB(
+								40,
+								40,
+								40
+							),
+
+						Text =
+							player.Name
+							.. " • "
+							.. teamName,
+
+						TextColor3 =
+							Color3.new(
+								1,
+								1,
+								1
+							),
+
+						TextSize = 10,
+
+						Font =
+							Enum.Font.Gotham,
+
+						TextXAlignment =
+							Enum.TextXAlignment.Left,
+
+						LayoutOrder =
+							order,
+
+						ZIndex = 14,
+
+					},
+					PlayerList
+				)
+
+			AddCorner(
+				button,
+				4
+			)
+
+			button.MouseButton1Click:Connect(
+				function()
+
+					SelectPlayer(
+						player,
+						"List"
+					)
+
+				end
+			)
+		end
+	end
+
+	UpdateTargetInfo()
+end
+
+------------------------------------------------------------
+-- TEAM LIST
+------------------------------------------------------------
+
+local function RefreshTeamList()
+
+	for _, child in ipairs(
+		TeamList:GetChildren()
+	) do
+
+		if child:IsA(
+			"TextButton"
+		) then
+
+			child:Destroy()
+
+		end
+	end
+
+	local teamList =
+		Teams:GetTeams()
+
+	table.sort(
+		teamList,
+		function(a, b)
+
+			return string.lower(
+				a.Name
+			)
+			<
+			string.lower(
+				b.Name
+			)
+
+		end
+	)
+
+	for index, team in ipairs(
+		teamList
+	) do
+
+		local ignored =
+			IgnoredTeams[
+				team
+			] == true
+
+		local button =
+			New(
+				"TextButton",
+				{
+
+					Name =
+						"Team_"
+						.. team.Name,
+
+					Size =
+						UDim2.new(
+							1,
+							0,
+							0,
+							25
+						),
+
+					BackgroundColor3 =
+						ignored
+						and
+						Color3.fromRGB(
+							80,
+							55,
+							55
+						)
+						or
+						Color3.fromRGB(
+							40,
+							40,
+							40
+						),
+
+					Text =
+						(
+							ignored
+							and
+							"IGNORE  ✓  "
+							or
+							"ALLOW  •  "
+						)
+						..
+						team.Name,
+
+					TextColor3 =
+						Color3.new(
+							1,
+							1,
+							1
+						),
+
+					TextSize = 10,
+
+					Font =
+						Enum.Font.Gotham,
+
+					TextXAlignment =
+						Enum.TextXAlignment.Left,
+
+					LayoutOrder =
+						index,
+
+					ZIndex = 14,
+
+				},
+				TeamList
+			)
+
+		AddCorner(
+			button,
+			4
+		)
+
+		button.MouseButton1Click:Connect(
+			function()
+
+				if IgnoredTeams[
+					team
+				] then
+
+					IgnoredTeams[
+						team
+					] = nil
+
+				else
+
+					IgnoredTeams[
+						team
+					] = true
+
+				end
+
+				RefreshTeamList()
+				RefreshPlayerList()
+
+			end
+		)
+	end
+end
+
+------------------------------------------------------------
+-- COLLAPSE
+------------------------------------------------------------
+
+local function UpdateTargetSection()
+
+	if TargetExpanded then
+
+		TargetContainer.Visible =
+			true
+
+		TargetContainer.Size =
+			UDim2.new(
+				1,
+				-10,
+				0,
+				215
+			)
+
+		TargetHeader.Text =
+			"▼  Target Player"
+
+	else
+
+		TargetContainer.Visible =
+			false
+
+		TargetHeader.Text =
+			"▶  Target Player"
+	end
+end
+
+local function UpdateTeamSection()
+
+	if TeamExpanded then
+
+		TeamContainer.Visible =
+			true
+
+		TeamContainer.Size =
+			UDim2.new(
+				1,
+				-10,
+				0,
+				125
+			)
+
+		TeamHeader.Text =
+			"▼  Ignore Team"
+
+	else
+
+		TeamContainer.Visible =
+			false
+
+		TeamHeader.Text =
+			"▶  Ignore Team"
+	end
+end
+
+TargetHeader.MouseButton1Click:Connect(
+	function()
+
+		TargetExpanded =
+			not TargetExpanded
+
+		UpdateTargetSection()
+	end
+)
+
+TeamHeader.MouseButton1Click:Connect(
+	function()
+
+		TeamExpanded =
+			not TeamExpanded
+
+		UpdateTeamSection()
+	end
+)
+
+------------------------------------------------------------
+-- CLICK TARGET TOGGLE
+------------------------------------------------------------
+
+ClickTargetButton.MouseButton1Click:Connect(
+	function()
+
+		CONFIG.ClickTarget =
+			not CONFIG.ClickTarget
+
+		UpdateClickTargetUI()
+
+		Status.Text =
+			"Status: CLICK TARGET "
+			..
+			(
+				CONFIG.ClickTarget
+				and "ON"
+				or "OFF"
+			)
+	end
+)
+
+------------------------------------------------------------
+-- MODE
+------------------------------------------------------------
+
+local function CycleMode()
+
+	local currentIndex = 1
+
+	for i, mode in ipairs(
+		MODES
+	) do
+
+		if mode ==
+			CONFIG.Mode then
+
+			currentIndex =
+				i
+
+			break
+		end
+	end
+
+	currentIndex += 1
+
+	if currentIndex >
+		#MODES then
+
+		currentIndex = 1
+	end
+
+	CONFIG.Mode =
+		MODES[currentIndex]
+
+	ModeButton.Text =
+		"Mode: "
+		.. CONFIG.Mode
+
+	Status.Text =
+		"Status: MODE → "
+		.. CONFIG.Mode
+end
+
+ModeButton.MouseButton1Click:Connect(
+	CycleMode
+)
+
+------------------------------------------------------------
+-- POSITION MODE
+------------------------------------------------------------
+
+local function CyclePositionMode()
+
+	local currentIndex = 1
+
+	for i, mode in ipairs(
+		POSITION_MODES
+	) do
+
+		if mode ==
+			CONFIG.PositionMode then
+
+			currentIndex =
+				i
+
+			break
+		end
+	end
+
+	currentIndex += 1
+
+	if currentIndex >
+		#POSITION_MODES then
+
+		currentIndex = 1
+	end
+
+	CONFIG.PositionMode =
+		POSITION_MODES[
+			currentIndex
+		]
+
+	PositionButton.Text =
+		"Position: "
+		.. CONFIG.PositionMode
+end
+
+PositionButton.MouseButton1Click:Connect(
+	CyclePositionMode
+)
+
+------------------------------------------------------------
+-- DELAY
+------------------------------------------------------------
+
+local function UpdateDelay()
+
+	local value =
+		tonumber(
+			DelayBox.Text
+		)
+
+	if value == nil then
+
+		value =
+			CONFIG.TeleportDelay
+	end
+
+	value =
+		math.clamp(
+			value,
+			0,
+			CONFIG.MaxDelay
+		)
+
+	CONFIG.TeleportDelay =
+		value
+
+	DelayBox.Text =
+		tostring(value)
+end
+
+------------------------------------------------------------
+-- DISTANCE
+------------------------------------------------------------
+
+local function UpdateDistance()
+
+	local value =
+		tonumber(
+			DistanceBox.Text
+		)
+
+	if value == nil then
+
+		value =
+			CONFIG.Distance
+	end
+
+	value =
+		math.clamp(
+			value,
+			0,
+			CONFIG.MaxDistance
+		)
+
+	CONFIG.Distance =
+		value
+
+	DistanceBox.Text =
+		tostring(value)
+end
+
+DelayBox.FocusLost:Connect(
+	UpdateDelay
+)
+
+DistanceBox.FocusLost:Connect(
+	UpdateDistance
+)
+
+------------------------------------------------------------
+-- RETURN
+------------------------------------------------------------
+
+ReturnButton.MouseButton1Click:Connect(
+	function()
+
+		CONFIG.ReturnToStart =
+			not CONFIG.ReturnToStart
+
+		ReturnButton.Text =
+			"Return To Start: "
+			..
+			(
+				CONFIG.ReturnToStart
+				and "ON"
+				or "OFF"
+			)
+	end
+)
+
+------------------------------------------------------------
+-- LOCK
+------------------------------------------------------------
+
+LockSelected.MouseButton1Click:Connect(
+	function()
+
+		if LockedPlayer then
+
+			LockedPlayer = nil
+
+			UpdateTargetInfo()
+
+			Status.Text =
+				"Status: LOCK CLEARED"
+
+			return
+		end
+
+		if not SelectedPlayer then
+
+			Status.Text =
+				"Status: SELECT PLAYER FIRST"
+
+			return
+		end
+
+		if not IsValidTarget(
+			SelectedPlayer
+		) then
+
+			Status.Text =
+				"Status: PLAYER INVALID"
+
+			return
+		end
+
+		LockedPlayer =
+			SelectedPlayer
+
+		UpdateTargetInfo()
+
+		Status.Text =
+			"Status: LOCKED → "
+			.. LockedPlayer.Name
+	end
+)
+
+------------------------------------------------------------
+-- RANDOM
+------------------------------------------------------------
+
+local function GetRandomTarget()
+
+	local targets =
+		GetTargets()
+
+	if #targets == 0 then
+		return nil
+	end
+
+	return targets[
+		math.random(
+			1,
+			#targets
+		)
+	]
+end
+
+------------------------------------------------------------
+-- NEAREST
+------------------------------------------------------------
+
+local function GetNearestTarget()
+
+	local localRoot =
+		GetCharacterRoot(
+			LocalPlayer
+		)
+
+	if not localRoot then
+		return nil
+	end
+
+	local bestPlayer = nil
+	local bestDistance = math.huge
+
+	for _, player in ipairs(
+		GetTargets()
+	) do
+
+		local root =
+			GetCharacterRoot(
+				player
+			)
+
+		if root then
+
+			local distance =
+				(
+					root.Position
+					- localRoot.Position
+				).Magnitude
+
+			if distance <
+				bestDistance then
+
+				bestDistance =
+					distance
+
+				bestPlayer =
+					player
+			end
+		end
+	end
+
+	return bestPlayer
+end
+
+------------------------------------------------------------
+-- HUNTER
+------------------------------------------------------------
+
+local function GetHunterTarget()
+
+	local localRoot =
+		GetCharacterRoot(
+			LocalPlayer
+		)
+
+	if not localRoot then
+		return nil
+	end
+
+	local bestPlayer = nil
+	local bestDistance = -math.huge
+
+	for _, player in ipairs(
+		GetTargets()
+	) do
+
+		local root =
+			GetCharacterRoot(
+				player
+			)
+
+		if root then
+
+			local distance =
+				(
+					root.Position
+					- localRoot.Position
+				).Magnitude
+
+			if distance >
+				bestDistance then
+
+				bestDistance =
+					distance
+
+				bestPlayer =
+					player
+			end
+		end
+	end
+
+	return bestPlayer
+end
+
+------------------------------------------------------------
+-- CYCLE
+------------------------------------------------------------
+
+local function GetCycleTarget()
+
+	local targets =
+		GetTargets()
+
+	if #targets == 0 then
+		return nil
+	end
+
+	SortAlphabetical(
+		targets
+	)
+
+	if CycleIndex >
+		#targets then
+
+		CycleIndex = 1
+	end
+
+	local target =
+		targets[
+			CycleIndex
+		]
+
+	CycleIndex += 1
+
+	if CycleIndex >
+		#targets then
+
+		CycleIndex = 1
+	end
+
+	return target
+end
+
+------------------------------------------------------------
+-- PING PONG
+------------------------------------------------------------
+
+local function GetPingPongTarget()
+
+	local targets =
+		GetTargets()
+
+	if #targets == 0 then
+		return nil
+	end
+
+	SortAlphabetical(
+		targets
+	)
+
+	local target
+
+	if PingPongForward then
+
+		target =
+			targets[1]
+
+	else
+
+		target =
+			targets[#targets]
+	end
+
+	PingPongForward =
+		not PingPongForward
+
+	return target
+end
+
+------------------------------------------------------------
+-- LAST
+------------------------------------------------------------
+
+local function GetLastTarget()
+
+	if LastTarget
+		and IsValidTarget(
+			LastTarget
+		) then
+
+		return LastTarget
+	end
+
+	return GetRandomTarget()
+end
+
+------------------------------------------------------------
+-- NORMAL TP TARGET
+------------------------------------------------------------
+
+local function GetNormalTPTarget()
+
+	--------------------------------------------------------
+	-- LOCK PRIORITY
+	--------------------------------------------------------
+
+	if LockedPlayer
+		and IsValidTarget(
+			LockedPlayer
+		) then
+
+		return LockedPlayer
+	end
+
+	--------------------------------------------------------
+	-- INVALID LOCK
+	--------------------------------------------------------
+
+	if LockedPlayer
+		and not IsValidTarget(
+			LockedPlayer
+		) then
+
+		LockedPlayer = nil
+
+		UpdateTargetInfo()
+	end
+
+	--------------------------------------------------------
+	-- MODE
+	--------------------------------------------------------
+
+	if CONFIG.Mode ==
+		"Random" then
+
+		return GetRandomTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Normal" then
+
+		return GetRandomTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Lock" then
+
+		return GetRandomTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Nearest" then
+
+		return GetNearestTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Cycle" then
+
+		return GetCycleTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Hunter" then
+
+		return GetHunterTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Ping-Pong" then
+
+		return GetPingPongTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Survivor" then
+
+		return GetRandomTarget()
+	end
+
+	if CONFIG.Mode ==
+		"Last" then
+
+		return GetLastTarget()
+	end
+
+	return GetRandomTarget()
+end
+
+------------------------------------------------------------
+-- NORMAL TL
+------------------------------------------------------------
+
+local function RunNormal(
+	Token
+)
+
+	local targets =
+		GetTargets()
+
+	for _, player in ipairs(
+		targets
+	) do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		if IsValidTarget(
+			player
+		) then
+
+			TeleportTo(
+				player
+			)
+
+			Status.Text =
+				"Status: TL → "
+				.. player.Name
+		end
+	end
+end
+
+------------------------------------------------------------
+-- RANDOM TL
+------------------------------------------------------------
+
+local function RunRandom(
+	Token
+)
+
+	local targets =
+		GetTargets()
+
+	for i = #targets, 2, -1 do
+
+		local j =
+			math.random(
+				1,
+				i
+			)
+
+		targets[i],
+		targets[j] =
+			targets[j],
+			targets[i]
+	end
+
+	for _, player in ipairs(
+		targets
+	) do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		if IsValidTarget(
+			player
+		) then
+
+			TeleportTo(
+				player
+			)
+
+			Status.Text =
+				"Status: RANDOM → "
+				.. player.Name
+		end
+	end
+end
+
+------------------------------------------------------------
+-- NEAREST TL
+------------------------------------------------------------
+
+local function RunNearest(
+	Token
+)
+
+	local remaining =
+		GetTargets()
+
+	while #remaining > 0 do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		local localRoot =
+			GetCharacterRoot(
+				LocalPlayer
+			)
+
+		if not localRoot then
+			return
+		end
+
+		local bestIndex = nil
+		local bestDistance = math.huge
+
+		for index, player
+			in ipairs(
+				remaining
+			) do
+
+			if IsValidTarget(
+				player
+			) then
+
+				local root =
+					GetCharacterRoot(
+						player
+					)
+
+				if root then
+
+					local distance =
+						(
+							root.Position
+							- localRoot.Position
+						).Magnitude
+
+					if distance <
+						bestDistance then
+
+						bestDistance =
+							distance
+
+						bestIndex =
+							index
+					end
+				end
+			end
+		end
+
+		if not bestIndex then
+			break
+		end
+
+		local target =
+			table.remove(
+				remaining,
+				bestIndex
+			)
+
+		if IsValidTarget(
+			target
+		) then
+
+			TeleportTo(
+				target
+			)
+
+			Status.Text =
+				"Status: NEAREST → "
+				.. target.Name
+		end
+	end
+end
+
+------------------------------------------------------------
+-- HUNTER TL
+------------------------------------------------------------
+
+local function RunHunter(
+	Token
+)
+
+	local remaining =
+		GetTargets()
+
+	while #remaining > 0 do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		local localRoot =
+			GetCharacterRoot(
+				LocalPlayer
+			)
+
+		if not localRoot then
+			return
+		end
+
+		local bestIndex = nil
+		local bestDistance = -math.huge
+
+		for index, player
+			in ipairs(
+				remaining
+			) do
+
+			if IsValidTarget(
+				player
+			) then
+
+				local root =
+					GetCharacterRoot(
+						player
+					)
+
+				if root then
+
+					local distance =
+						(
+							root.Position
+							- localRoot.Position
+						).Magnitude
+
+					if distance >
+						bestDistance then
+
+						bestDistance =
+							distance
+
+						bestIndex =
+							index
+					end
+				end
+			end
+		end
+
+		if not bestIndex then
+			break
+		end
+
+		local target =
+			table.remove(
+				remaining,
+				bestIndex
+			)
+
+		if IsValidTarget(
+			target
+		) then
+
+			TeleportTo(
+				target
+			)
+
+			Status.Text =
+				"Status: HUNTER → "
+				.. target.Name
+		end
+	end
+end
+
+------------------------------------------------------------
+-- CYCLE TL
+------------------------------------------------------------
+
+local function RunCycle(
+	Token
+)
+
+	local targets =
+		GetTargets()
+
+	SortAlphabetical(
+		targets
+	)
+
+	for _, player in ipairs(
+		targets
+	) do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		if IsValidTarget(
+			player
+		) then
+
+			TeleportTo(
+				player
+			)
+
+			Status.Text =
+				"Status: CYCLE → "
+				.. player.Name
+		end
+	end
+end
+
+------------------------------------------------------------
+-- PING PONG TL
+------------------------------------------------------------
+
+local function RunPingPong(
+	Token
+)
+
+	local targets =
+		GetTargets()
+
+	SortAlphabetical(
+		targets
+	)
+
+	if #targets == 0 then
+		return
+	end
+
+	if not PingPongForward then
+		table.reverse(
+			targets
+		)
+	end
+
+	for _, player in ipairs(
+		targets
+	) do
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		if IsValidTarget(
+			player
+		) then
+
+			TeleportTo(
+				player
+			)
+
+			Status.Text =
+				"Status: PING-PONG → "
+				.. player.Name
+		end
+	end
+
+	PingPongForward =
+		not PingPongForward
+end
+
+------------------------------------------------------------
+-- SURVIVOR
+------------------------------------------------------------
+
+local function RunSurvivor(
+	Token
+)
+
+	RunNormal(
+		Token
+	)
+end
+
+------------------------------------------------------------
+-- LAST
+------------------------------------------------------------
+
+local function RunLast(
+	Token
+)
+
+	if LastTarget
+		and IsValidTarget(
+			LastTarget
+		) then
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		TeleportTo(
+			LastTarget
+		)
+
+		Status.Text =
+			"Status: LAST → "
+			.. LastTarget.Name
+
+		return
+	end
+
+	local target =
+		GetRandomTarget()
+
+	if target then
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			return
+		end
+
+		TeleportTo(
+			target
+		)
+
+		Status.Text =
+			"Status: LAST → "
+			.. target.Name
+	end
+end
+
+------------------------------------------------------------
+-- LOCK
+------------------------------------------------------------
+
+local function RunLockTarget(
+	player,
+	Token
+)
+
+	if not player then
+		return
+	end
+
+	local originalCharacter =
+		player.Character
+
+	while Running
+		and Token ==
+			ActionToken do
+
+		if not IsValidTarget(
+			player
+		) then
+
+			task.wait(
+				0.2
+			)
+
+			if player.Character
+				~= originalCharacter then
+
+				originalCharacter =
+					player.Character
+			end
+
+		else
+
+			if not TeleportDelay(
+				Token
+			) then
+
+				return
+			end
+
+			if IsValidTarget(
+				player
+			) then
+
+				TeleportTo(
+					player
+				)
+
+				Status.Text =
+					"Status: LOCK → "
+					.. player.Name
+			end
+		end
+
+		if player.Character
+			~= originalCharacter then
+
+			break
+		end
+	end
+end
+
+local function RunLock(
+	Token
+)
+
+	local target =
+		LockedPlayer
+		or SelectedPlayer
+
+	if target
+		and IsValidTarget(
+			target
+		) then
+
+		RunLockTarget(
+			target,
+			Token
+		)
+
+		return
+	end
+
+	local targets =
+		GetTargets()
+
+	if #targets == 0 then
+		return
+	end
+
+	local fallback =
+		targets[
+			math.random(
+				1,
+				#targets
+			)
+		]
+
+	RunLockTarget(
+		fallback,
+		Token
+	)
+end
+
+------------------------------------------------------------
+-- PASS
+------------------------------------------------------------
+
+local function RunPass(
+	Token
+)
+
+	if CONFIG.Mode ==
+		"Normal" then
+
+		RunNormal(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Lock" then
+
+		RunLock(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Random" then
+
+		RunRandom(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Nearest" then
+
+		RunNearest(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Cycle" then
+
+		RunCycle(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Hunter" then
+
+		RunHunter(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Ping-Pong" then
+
+		RunPingPong(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Survivor" then
+
+		RunSurvivor(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Last" then
+
+		RunLast(
+			Token
+		)
+	end
+end
+
+------------------------------------------------------------
+-- NORMAL TP
+------------------------------------------------------------
+
+local function RunNormalTP()
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = false
+
+	CurrentActionReturns =
+		false
+
+	local target =
+		GetNormalTPTarget()
+
+	if not target then
+
+		Running = false
+
+		Status.Text =
+			"Status: NO VALID TARGET"
+
+		return
+	end
+
+	Status.Text =
+		"Status: NORMAL TP → "
+		.. target.Name
+
+	if not TeleportDelay(
+		Token
+	) then
+
+		Running = false
+
+		return
+	end
+
+	if IsValidTarget(
+		target
+	) then
+
+		TeleportTo(
+			target
+		)
+
+		Status.Text =
+			"NORMAL TP → "
+			.. target.Name
+
+	else
+
+		Status.Text =
+			"Status: TARGET INVALID"
+	end
+
+	Running = false
+	LoopMode = false
+
+	CurrentActionReturns =
+		false
+
+	StartCFrame = nil
+end
+
+------------------------------------------------------------
+-- TL
+------------------------------------------------------------
+
+local function RunTL()
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = false
+
+	CurrentActionReturns =
+		CONFIG.ReturnToStart
+
+	SaveStartPosition()
+
+	Status.Text =
+		"Status: TL RUNNING"
+
+	RunPass(
+		Token
+	)
+
+	if Token ~=
+		ActionToken then
+
+		return
+	end
+
+	Running = false
+
+	if CurrentActionReturns then
+		ReturnToStart()
+	end
+
+	CurrentActionReturns =
+		false
+
+	Status.Text =
+		"Status: TL COMPLETE"
+
+	StartCFrame = nil
+end
+
+------------------------------------------------------------
+-- LTL
+------------------------------------------------------------
+
+local function RunLTL()
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = true
+
+	CurrentActionReturns =
+		CONFIG.ReturnToStart
+
+	SaveStartPosition()
+
+	Status.Text =
+		"Status: LTL RUNNING"
+
+	while Running
+		and LoopMode
+		and Token ==
+			ActionToken do
+
+		RunPass(
+			Token
+		)
+
+		if not Running
+			or not LoopMode
+			or Token ~=
+				ActionToken then
+
+			break
+		end
+
+		task.wait()
+	end
+
+	if Token ~=
+		ActionToken then
+
+		return
+	end
+
+	if CurrentActionReturns then
+		ReturnToStart()
+	end
+
+	Running = false
+	LoopMode = false
+
+	CurrentActionReturns =
+		false
+
+	StartCFrame = nil
+
+	Status.Text =
+		"Status: LTL STOPPED"
+end
+
+------------------------------------------------------------
+-- STOP
+------------------------------------------------------------
+
+local function StopForce()
+
+	ActionToken += 1
+
+	local shouldReturn =
+		CurrentActionReturns
+
+	Running = false
+	LoopMode = false
+
+	CurrentActionReturns =
+		false
+
+	if shouldReturn then
+		ReturnToStart()
+	end
+
+	StartCFrame = nil
+
+	LastTarget = nil
+
+	Status.Text =
+		"Status: STOP FORCE"
+end
+
+------------------------------------------------------------
+--========================================================
+-- IMPROVED CLICK TARGET
+--========================================================
+------------------------------------------------------------
+
+local function IsPointOverOurGui(
+	position
+)
+
+	local guiObjects =
+		PlayerGui:GetGuiObjectsAtPosition(
+			position.X,
+			position.Y
+		)
+
+	for _, guiObject in ipairs(
+		guiObjects
+	) do
+
+		if guiObject:IsDescendantOf(
+			ScreenGui
+		) then
+
+			return true
+		end
+	end
+
+	return false
+end
+
+------------------------------------------------------------
+-- FIND PLAYER FROM PART
+------------------------------------------------------------
+
+local function GetPlayerFromPart(
+	part
+)
+
+	if not part then
+		return nil
+	end
+
+	--------------------------------------------------------
+	-- Direct character lookup
+	--------------------------------------------------------
+
+	local model =
+		part:FindFirstAncestorOfClass(
+			"Model"
+		)
+
+	if model then
+
+		local player =
+			Players:GetPlayerFromCharacter(
+				model
+			)
+
+		if player then
+			return player
+		end
+	end
+
+	--------------------------------------------------------
+	-- Walk through all ancestors
+	--------------------------------------------------------
+
+	local current =
+		part
+
+	while current
+		and current ~= workspace do
+
+		if current:IsA(
+			"Model"
+		) then
+
+			local player =
+				Players:GetPlayerFromCharacter(
+					current
+				)
+
+			if player then
+				return player
+			end
+
+			local humanoid =
+				current:FindFirstChildOfClass(
+					"Humanoid"
+				)
+
+			if humanoid then
+
+				local possiblePlayer =
+					Players:GetPlayerFromCharacter(
+						current
+					)
+
+				if possiblePlayer then
+					return possiblePlayer
+				end
+			end
+		end
+
+		current =
+			current.Parent
+	end
+
+	return nil
+end
+
+------------------------------------------------------------
+-- RAYCAST PLAYER
+------------------------------------------------------------
+
+local function RaycastPlayer(
+	screenPosition
+)
+
+	local camera =
+		workspace.CurrentCamera
+
+	if not camera then
+		return nil
+	end
+
+	--------------------------------------------------------
+	-- SCREEN POINT RAY
+	--------------------------------------------------------
+
+	local ray =
+		camera:ScreenPointToRay(
+			screenPosition.X,
+			screenPosition.Y
+		)
+
+	local params =
+		RaycastParams.new()
+
+	params.FilterType =
+		Enum.RaycastFilterType.Exclude
+
+	params.FilterDescendantsInstances = {
+		LocalPlayer.Character
+	}
+
+	params.IgnoreWater = true
+
+	local result =
+		workspace:Raycast(
+			ray.Origin,
+			ray.Direction * 4000,
+			params
+		)
+
+	if result then
+
+		local player =
+			GetPlayerFromPart(
+				result.Instance
+			)
+
+		if player then
+			return player
+		end
+	end
+
+	return nil
+end
+
+------------------------------------------------------------
+-- MULTI RAY
+------------------------------------------------------------
+
+local function GetPlayerFromScreenPosition(
+	position,
+	isTouch
+)
+
+	--------------------------------------------------------
+	-- FIRST: EXACT CENTER
+	--------------------------------------------------------
+
+	local direct =
+		RaycastPlayer(
+			position
+		)
+
+	if direct then
+		return direct
+	end
+
+	--------------------------------------------------------
+	-- TOUCH / MOBILE:
+	-- CHECK A SMALL AREA AROUND THE TAP
+	--------------------------------------------------------
+
+	local offsets
+
+	if isTouch then
+
+		offsets = {
+
+			Vector2.new(
+				-8,
+				0
+			),
+
+			Vector2.new(
+				8,
+				0
+			),
+
+			Vector2.new(
+				0,
+				-8
+			),
+
+			Vector2.new(
+				0,
+				8
+			),
+
+			Vector2.new(
+				-14,
+				-14
+			),
+
+			Vector2.new(
+				14,
+				-14
+			),
+
+			Vector2.new(
+				-14,
+				14
+			),
+
+			Vector2.new(
+				14,
+				14
+			),
+
+		}
+
+	else
+
+		offsets = {
+
+			Vector2.new(
+				-5,
+				0
+			),
+
+			Vector2.new(
+				5,
+				0
+			),
+
+			Vector2.new(
+				0,
+				-5
+			),
+
+			Vector2.new(
+				0,
+				5
+			),
+
+		}
+	end
+
+	--------------------------------------------------------
+	-- FALLBACK RAYS
+	--------------------------------------------------------
+
+	for _, offset in ipairs(
+		offsets
+	) do
+
+		local candidate =
+			RaycastPlayer(
+				position + offset
+			)
+
+		if candidate then
+			return candidate
+		end
+	end
+
+	return nil
+end
+
+------------------------------------------------------------
+-- PROCESS CLICK
+------------------------------------------------------------
+
+local function ProcessClickTarget(
+	position,
+	isTouch
+)
+
+	if not CONFIG.ClickTarget then
+		return
+	end
+
+	if not position then
+		return
+	end
+
+	--------------------------------------------------------
+	-- NEVER SELECT THROUGH OUR UI
+	--------------------------------------------------------
+
+	if IsPointOverOurGui(
+		position
+	) then
+
+		return
+	end
+
+	--------------------------------------------------------
+	-- FIND PLAYER
+	--------------------------------------------------------
+
+	local player =
+		GetPlayerFromScreenPosition(
+			position,
+			isTouch
+		)
+
+	if not player then
+		return
+	end
+
+	--------------------------------------------------------
+	-- IMPORTANT:
+	-- NO IGNORE TEAM CHECK HERE
+	--------------------------------------------------------
+
+	if IsSelectableByClick(
+		player
+	) then
+
+		SelectPlayer(
+			player,
+			"Click"
+		)
+	end
+end
+
+------------------------------------------------------------
+-- PC MOUSE CLICK
+------------------------------------------------------------
+
+Mouse.Button1Down:Connect(
+	function()
+
+		if not CONFIG.ClickTarget then
+			return
+		end
+
+		local location =
+			UserInputService:GetMouseLocation()
+
+		ProcessClickTarget(
+			location,
+			false
+		)
+	end
+)
+
+------------------------------------------------------------
+-- MOBILE TOUCH
+------------------------------------------------------------
+
+UserInputService.TouchTap:Connect(
+	function(
+		touchPositions,
+		gameProcessedEvent
+	)
+
+		if not CONFIG.ClickTarget then
+			return
+		end
+
+		if not touchPositions then
+			return
+		end
+
+		----------------------------------------------------
+		-- DO NOT use gameProcessedEvent here.
+		-- UI is filtered manually above.
+		----------------------------------------------------
+
+		for _, position in ipairs(
+			touchPositions
+		) do
+
+			ProcessClickTarget(
+				position,
+				true
+			)
+
+			break
+		end
+	end
+)
+
+------------------------------------------------------------
+-- DRAG SYSTEM
+------------------------------------------------------------
+
+local function ClampPosition(
+	position,
+	object
+)
+
+	local camera =
+		workspace.CurrentCamera
+
+	if not camera then
+		return position
+	end
+
+	local viewport =
+		camera.ViewportSize
+
+	local absoluteX =
+		position.X.Scale
+		* viewport.X
+		+ position.X.Offset
+
+	local absoluteY =
+		position.Y.Scale
+		* viewport.Y
+		+ position.Y.Offset
+
+	local maxX =
+		math.max(
+			0,
+			viewport.X
+			- object.AbsoluteSize.X
+		)
+
+	local maxY =
+		math.max(
+			0,
+			viewport.Y
+			- object.AbsoluteSize.Y
+		)
+
+	absoluteX =
+		math.clamp(
+			absoluteX,
+			0,
+			maxX
+		)
+
+	absoluteY =
+		math.clamp(
+			absoluteY,
+			0,
+			maxY
+		)
+
+	return UDim2.fromOffset(
+		absoluteX,
+		absoluteY
+	)
+end
+
+------------------------------------------------------------
+
+local function MakeDraggable(
+	object,
+	handle
+)
+
+	local dragging = false
+
+	local dragStart = nil
+	local startPosition = nil
+
+	handle.InputBegan:Connect(
+		function(input)
+
+			if
+				input.UserInputType
+				~=
+				Enum.UserInputType.MouseButton1
+				and
+				input.UserInputType
+				~=
+				Enum.UserInputType.Touch
+			then
+
+				return
+			end
+
+			dragging = true
+
+			dragStart =
+				input.Position
+
+			startPosition =
+				object.Position
+
+			input.Changed:Connect(
+				function()
+
+					if input.UserInputState
+						==
+						Enum.UserInputState.End then
+
+						dragging = false
+					end
+				end
+			)
+		end
+	)
+
+	UserInputService.InputChanged:Connect(
+		function(input)
+
+			if not dragging then
+				return
+			end
+
+			if
+				input.UserInputType
+				~=
+				Enum.UserInputType.MouseMovement
+				and
+				input.UserInputType
+				~=
+				Enum.UserInputType.Touch
+			then
+
+				return
+			end
+
+			if not dragStart
+				or not startPosition then
+
+				return
+			end
+
+			local delta =
+				input.Position
+				- dragStart
+
+			local newPosition =
+				UDim2.fromOffset(
+
+					startPosition.X.Offset
+					+ delta.X,
+
+					startPosition.Y.Offset
+					+ delta.Y
+				)
+
+			object.Position =
+				ClampPosition(
+					newPosition,
+					object
+				)
+		end
+	)
+
+	UserInputService.InputEnded:Connect(
+		function(input)
+
+			if
+				input.UserInputType
+				==
+				Enum.UserInputType.MouseButton1
+				or
+				input.UserInputType
+				==
+				Enum.UserInputType.Touch
+			then
+
+				dragging = false
+			end
+		end
+	)
+end
+
+------------------------------------------------------------
+-- DRAG
+------------------------------------------------------------
+
+MakeDraggable(
+	Menu,
+	HeaderDragArea
+)
+
+MakeDraggable(
+	MainButton,
+	MainButton
+)
+
+------------------------------------------------------------
+-- OPEN / CLOSE
+------------------------------------------------------------
+
+MainButton.MouseButton1Click:Connect(
+	function()
+
+		Menu.Visible =
+			not Menu.Visible
+
+		if Menu.Visible then
+
+			Status.Text =
+				"Status: READY"
+		end
+	end
+)
+
+CloseButton.MouseButton1Click:Connect(
+	function()
+
+		Menu.Visible = false
+	end
+)
+
+------------------------------------------------------------
+-- NORMAL TP
+------------------------------------------------------------
+
+NormalTPButton.MouseButton1Click:Connect(
+	function()
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunNormalTP
+		)
+	end
+)
+
+------------------------------------------------------------
+-- TL
+------------------------------------------------------------
+
+TLButton.MouseButton1Click:Connect(
+	function()
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunTL
+		)
+	end
+)
+
+------------------------------------------------------------
+-- LTL
+------------------------------------------------------------
+
+LTLButton.MouseButton1Click:Connect(
+	function()
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunLTL
+		)
+	end
+)
+
+------------------------------------------------------------
+-- STOP
+------------------------------------------------------------
+
+StopButton.MouseButton1Click:Connect(
+	function()
+
+		Menu.Visible = false
+
+		StopForce()
+	end
+)
+
+------------------------------------------------------------
+-- REFRESH
+------------------------------------------------------------
+
+RefreshPlayers.MouseButton1Click:Connect(
+	function()
+
+		RefreshPlayerList()
+
+		Status.Text =
+			"Status: PLAYER LIST REFRESHED"
+	end
+)
+
+------------------------------------------------------------
+-- PLAYER ADDED
+------------------------------------------------------------
+
+Players.PlayerAdded:Connect(
+	function(player)
+
+		player.CharacterAdded:Connect(
+			function()
+
+				task.wait(
+					0.15
+				)
+
+				if player ==
+					SelectedPlayer then
+
+					ApplyHighlight()
+				end
+
+				RefreshPlayerList()
+			end
+		)
+
+		RefreshPlayerList()
+	end
+)
+
+------------------------------------------------------------
+-- PLAYER REMOVING
+------------------------------------------------------------
+
+Players.PlayerRemoving:Connect(
+	function(player)
+
+		if player ==
+			SelectedPlayer then
+
+			SelectedPlayer =
+				nil
+
+			RemoveHighlight()
+		end
+
+		if player ==
+			LockedPlayer then
+
+			LockedPlayer = nil
+		end
+
+		if player ==
+			LastTarget then
+
+			LastTarget = nil
+		end
+
+		RefreshPlayerList()
+		UpdateTargetInfo()
+	end
+)
+
+------------------------------------------------------------
+-- LOCAL CHARACTER
+------------------------------------------------------------
+
+LocalPlayer.CharacterAdded:Connect(
+	function()
+
+		StartCFrame = nil
+
+		task.wait(
+			0.15
+		)
+
+		if SelectedPlayer then
+			ApplyHighlight()
+		end
+
+		Status.Text =
+			"Status: CHARACTER RESET"
+	end
+)
+
+------------------------------------------------------------
+-- LOCAL TEAM
+------------------------------------------------------------
+
+LocalPlayer:GetPropertyChangedSignal(
+	"Team"
+):Connect(
+	function()
+
+		RefreshTeamList()
+		RefreshPlayerList()
+	end
+)
+
+------------------------------------------------------------
+-- TEAM EVENTS
+------------------------------------------------------------
+
+Teams.ChildAdded:Connect(
+	function()
+
+		task.wait(
+			0.1
+		)
+
+		RefreshTeamList()
+		RefreshPlayerList()
+	end
+)
+
+Teams.ChildRemoved:Connect(
+	function()
+
+		RefreshTeamList()
+		RefreshPlayerList()
+	end
+)
+
+------------------------------------------------------------
+-- INITIALIZATION
+------------------------------------------------------------
+
+UpdateTargetSection()
+UpdateTeamSection()
+UpdateClickTargetUI()
+
+RefreshPlayerList()
+RefreshTeamList()
+UpdateTargetInfo()
+
+ModeButton.Text =
+	"Mode: "
+	.. CONFIG.Mode
+
+PositionButton.Text =
+	"Position: "
+	.. CONFIG.PositionMode
+
+ReturnButton.Text =
+	"Return To Start: "
+	..
+	(
+		CONFIG.ReturnToStart
+		and "ON"
+		or "OFF"
+	)
+
+math.randomseed(
+	math.floor(
+		os.clock() * 1000000
+	)
+	% 2147483647
+)
+
+Status.Text =
+	"Status: READY"
+
+------------------------------------------------------------
+-- END V7.3
+------------------------------------------------------------
