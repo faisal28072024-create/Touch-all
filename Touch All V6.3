@@ -1,0 +1,3247 @@
+--[[
+============================================================
+ TL / LTL TELEPORT PROTOTYPE V6.3
+ LocalScript - Roblox Studio
+============================================================
+
+ V6.3 LOCK PRIORITY SYSTEM
+
+ LOCKED PLAYER = ABSOLUTE PRIORITY
+
+ TL ONCE:
+ • Locked Player → teleport sesuai Position/Distance
+ • Tunggu sesuai Delay
+ • Kembali ke posisi awal
+
+ LTL LOOP:
+ • Locked Player → teleport
+ • Tunggu sesuai Delay
+ • Teleport lagi ke Locked Player
+ • Loop terus
+
+ TL TO TARGET:
+ • Hanya teleport ke Locked Player
+ • Langsung
+ • Tidak kembali
+ • Tidak loop
+
+ IMPORTANT:
+ • Locked Player tetap bisa ditarget walaupun Team-nya di Ignore
+ • Locked Player mengabaikan Mode
+ • Locked Player mengabaikan Team Filter
+ • Jika Locked Player mati/respawn/keluar,
+   tidak pindah otomatis ke player lain
+
+ MODES:
+ • NORMAL
+ • LOCK
+ • RANDOM
+ • NEAREST
+ • CYCLE
+ • HUNTER
+ • PING-PONG
+ • SURVIVOR
+ • LAST
+
+ FEATURES:
+ • Player selector
+ • Username + Team
+ • Rainbow selected-player outline
+ • Lock Player
+ • Team filter persistence
+ • Smooth draggable UI
+ • Mobile + Mouse
+ • Player scrolling
+ • Team scrolling
+ • Center / Front / Back
+ • Adjustable distance
+ • Adjustable delay
+ • STOP FORCE
+============================================================
+]]
+
+--============================================================
+-- SERVICES
+--============================================================
+
+local Players = game:GetService("Players")
+local Teams = game:GetService("Teams")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+--============================================================
+-- CONFIG
+--============================================================
+
+local CONFIG = {
+	TeleportDelay = 0.2,
+
+	PositionMode = "Center",
+
+	Distance = 2,
+
+	MaxDelay = 10,
+
+	MaxDistance = 500,
+
+	Mode = "Normal",
+}
+
+--============================================================
+-- MODES
+--============================================================
+
+local MODES = {
+	"Normal",
+	"Lock",
+	"Random",
+	"Nearest",
+	"Cycle",
+	"Hunter",
+	"Ping-Pong",
+	"Survivor",
+	"Last",
+}
+
+local ModeIndex = 1
+
+--============================================================
+-- STATE
+--============================================================
+
+local Running = false
+local LoopMode = false
+
+local StartCFrame = nil
+
+local SelectedPlayer = nil
+local LockedPlayer = nil
+
+local IgnoredTeams = {}
+local TeamInitialized = false
+
+local LastTarget = nil
+
+local PingPongForward = true
+
+local ActionToken = 0
+
+--============================================================
+-- SCREEN GUI
+--============================================================
+
+local ScreenGui = Instance.new("ScreenGui")
+
+ScreenGui.Name = "TL_LTL_GUI_V6_3"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = PlayerGui
+
+--============================================================
+-- SMOOTH DRAG
+--============================================================
+
+local function MakeDraggable(Object, Handle)
+
+	Handle = Handle or Object
+
+	local Dragging = false
+	local DragStart = nil
+	local StartPosition = nil
+
+	local TargetX = 0
+	local TargetY = 0
+
+	local DragInput = nil
+
+	Handle.InputBegan:Connect(function(Input)
+
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			Dragging = true
+
+			DragStart = Input.Position
+			StartPosition = Object.Position
+
+			TargetX = StartPosition.X.Offset
+			TargetY = StartPosition.Y.Offset
+
+			Input.Changed:Connect(function()
+
+				if Input.UserInputState == Enum.UserInputState.End then
+					Dragging = false
+				end
+
+			end)
+
+		end
+
+	end)
+
+	Handle.InputChanged:Connect(function(Input)
+
+		if Input.UserInputType == Enum.UserInputType.MouseMovement
+			or Input.UserInputType == Enum.UserInputType.Touch then
+
+			DragInput = Input
+
+		end
+
+	end)
+
+	UserInputService.InputChanged:Connect(function(Input)
+
+		if not Dragging then
+			return
+		end
+
+		if Input ~= DragInput
+			and Input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and Input.UserInputType ~= Enum.UserInputType.Touch then
+
+			return
+
+		end
+
+		local Delta = Input.Position - DragStart
+
+		local ScreenSize = ScreenGui.AbsoluteSize
+		local ObjectSize = Object.AbsoluteSize
+
+		local MaxX = math.max(
+			0,
+			ScreenSize.X - ObjectSize.X
+		)
+
+		local MaxY = math.max(
+			0,
+			ScreenSize.Y - ObjectSize.Y
+		)
+
+		TargetX = math.clamp(
+			StartPosition.X.Offset + Delta.X,
+			0,
+			MaxX
+		)
+
+		TargetY = math.clamp(
+			StartPosition.Y.Offset + Delta.Y,
+			0,
+			MaxY
+		)
+
+	end)
+
+	return RunService.RenderStepped:Connect(function()
+
+		if not Dragging then
+			return
+		end
+
+		local Current = Object.Position
+
+		local NewX =
+			Current.X.Offset +
+			(TargetX - Current.X.Offset) * 0.35
+
+		local NewY =
+			Current.Y.Offset +
+			(TargetY - Current.Y.Offset) * 0.35
+
+		Object.Position = UDim2.fromOffset(
+			NewX,
+			NewY
+		)
+
+	end)
+
+end
+
+--============================================================
+-- MAIN BUTTON
+--============================================================
+
+local MainButton = Instance.new("TextButton")
+
+MainButton.Name = "TLButton"
+
+MainButton.Size = UDim2.fromOffset(58,58)
+
+MainButton.Position = UDim2.new(
+	0.5,
+	-29,
+	0.5,
+	-29
+)
+
+MainButton.BackgroundColor3 =
+	Color3.fromRGB(45,45,45)
+
+MainButton.BackgroundTransparency = 0.1
+
+MainButton.Text = "TL"
+MainButton.TextColor3 = Color3.new(1,1,1)
+MainButton.TextSize = 20
+MainButton.Font = Enum.Font.GothamBold
+
+MainButton.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(1,0)
+MainCorner.Parent = MainButton
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Thickness = 2
+MainStroke.Color = Color3.fromRGB(120,120,120)
+MainStroke.Parent = MainButton
+
+MakeDraggable(MainButton, MainButton)
+
+--============================================================
+-- MENU
+--============================================================
+
+local Menu = Instance.new("Frame")
+
+Menu.Name = "Menu"
+
+Menu.Size = UDim2.fromOffset(220,300)
+
+Menu.Position = UDim2.new(
+	0.5,
+	-110,
+	0.5,
+	-150
+)
+
+Menu.BackgroundColor3 =
+	Color3.fromRGB(25,25,25)
+
+Menu.BackgroundTransparency = 0.05
+Menu.Visible = false
+
+Menu.Parent = ScreenGui
+
+local MenuCorner = Instance.new("UICorner")
+MenuCorner.CornerRadius = UDim.new(0,12)
+MenuCorner.Parent = Menu
+
+local MenuStroke = Instance.new("UIStroke")
+MenuStroke.Thickness = 2
+MenuStroke.Color = Color3.fromRGB(80,80,80)
+MenuStroke.Parent = Menu
+
+--============================================================
+-- HEADER
+--============================================================
+
+local Header = Instance.new("Frame")
+
+Header.Name = "DragHeader"
+
+Header.Size = UDim2.new(1,0,0,38)
+
+Header.BackgroundTransparency = 1
+
+Header.Parent = Menu
+
+MakeDraggable(Menu, Header)
+
+local Title = Instance.new("TextLabel")
+
+Title.Size = UDim2.new(1,-20,1,0)
+Title.Position = UDim2.fromOffset(10,0)
+
+Title.BackgroundTransparency = 1
+
+Title.Text = "TELEPORT V6.3"
+
+Title.TextColor3 = Color3.new(1,1,1)
+Title.TextSize = 16
+Title.Font = Enum.Font.GothamBold
+
+Title.Parent = Header
+
+--============================================================
+-- SCROLL
+--============================================================
+
+local Scroll = Instance.new("ScrollingFrame")
+
+Scroll.Name = "MainScroll"
+
+Scroll.Size = UDim2.new(1,-12,1,-42)
+
+Scroll.Position = UDim2.fromOffset(6,40)
+
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+
+Scroll.ScrollBarThickness = 4
+
+Scroll.CanvasSize =
+	UDim2.fromOffset(0,0)
+
+Scroll.ScrollingDirection =
+	Enum.ScrollingDirection.Y
+
+Scroll.Parent = Menu
+
+local ScrollLayout = Instance.new("UIListLayout")
+
+ScrollLayout.Padding = UDim.new(0,6)
+
+ScrollLayout.SortOrder =
+	Enum.SortOrder.LayoutOrder
+
+ScrollLayout.Parent = Scroll
+
+local ScrollPadding = Instance.new("UIPadding")
+
+ScrollPadding.PaddingTop =
+	UDim.new(0,2)
+
+ScrollPadding.PaddingBottom =
+	UDim.new(0,8)
+
+ScrollPadding.PaddingLeft =
+	UDim.new(0,6)
+
+ScrollPadding.PaddingRight =
+	UDim.new(0,6)
+
+ScrollPadding.Parent = Scroll
+
+ScrollLayout:GetPropertyChangedSignal(
+	"AbsoluteContentSize"
+):Connect(function()
+
+	Scroll.CanvasSize =
+		UDim2.fromOffset(
+			0,
+			ScrollLayout.AbsoluteContentSize.Y + 15
+		)
+
+end)
+
+--============================================================
+-- LABEL
+--============================================================
+
+local function CreateLabel(
+	Text,
+	Height,
+	Order
+)
+
+	local Label =
+		Instance.new("TextLabel")
+
+	Label.Size =
+		UDim2.new(1,0,0,Height)
+
+	Label.BackgroundTransparency = 1
+
+	Label.Text = Text
+
+	Label.TextColor3 =
+		Color3.fromRGB(
+			190,
+			190,
+			190
+		)
+
+	Label.TextSize = 11
+
+	Label.Font =
+		Enum.Font.GothamBold
+
+	Label.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	Label.LayoutOrder = Order
+
+	Label.Parent = Scroll
+
+	return Label
+
+end
+
+--============================================================
+-- DELAY
+--============================================================
+
+local DelayRow =
+	Instance.new("Frame")
+
+DelayRow.Size =
+	UDim2.new(1,0,0,34)
+
+DelayRow.BackgroundTransparency = 1
+
+DelayRow.LayoutOrder = 1
+
+DelayRow.Parent = Scroll
+
+local DelayLabel =
+	Instance.new("TextLabel")
+
+DelayLabel.Size =
+	UDim2.new(0.55,0,1,0)
+
+DelayLabel.BackgroundTransparency = 1
+
+DelayLabel.Text = "DELAY"
+
+DelayLabel.TextColor3 =
+	Color3.fromRGB(
+		190,
+		190,
+		190
+	)
+
+DelayLabel.TextSize = 12
+
+DelayLabel.Font =
+	Enum.Font.GothamBold
+
+DelayLabel.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+DelayLabel.Parent = DelayRow
+
+local DelayBox =
+	Instance.new("TextBox")
+
+DelayBox.Size =
+	UDim2.new(0.45,0,0,29)
+
+DelayBox.Position =
+	UDim2.new(0.55,0,0,2)
+
+DelayBox.BackgroundColor3 =
+	Color3.fromRGB(
+		50,
+		50,
+		50
+	)
+
+DelayBox.Text =
+	tostring(
+		CONFIG.TeleportDelay
+	)
+
+DelayBox.TextColor3 =
+	Color3.new(1,1,1)
+
+DelayBox.TextSize = 12
+
+DelayBox.Font =
+	Enum.Font.Gotham
+
+DelayBox.ClearTextOnFocus = false
+
+DelayBox.Parent = DelayRow
+
+local DelayCorner =
+	Instance.new("UICorner")
+
+DelayCorner.CornerRadius =
+	UDim.new(0,7)
+
+DelayCorner.Parent = DelayBox
+
+local function UpdateDelay()
+
+	local Number =
+		tonumber(
+			DelayBox.Text
+		)
+
+	if not Number then
+
+		DelayBox.Text =
+			tostring(
+				CONFIG.TeleportDelay
+			)
+
+		return
+
+	end
+
+	CONFIG.TeleportDelay =
+		math.clamp(
+			Number,
+			0,
+			CONFIG.MaxDelay
+		)
+
+	DelayBox.Text =
+		tostring(
+			CONFIG.TeleportDelay
+		)
+
+end
+
+DelayBox.FocusLost:Connect(
+	UpdateDelay
+)
+
+--============================================================
+-- MODE
+--============================================================
+
+local ModeButton =
+	Instance.new("TextButton")
+
+ModeButton.Size =
+	UDim2.new(1,0,0,34)
+
+ModeButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
+
+ModeButton.TextColor3 =
+	Color3.new(1,1,1)
+
+ModeButton.TextSize = 11
+
+ModeButton.Font =
+	Enum.Font.GothamBold
+
+ModeButton.LayoutOrder = 2
+
+ModeButton.Parent = Scroll
+
+local ModeCorner =
+	Instance.new("UICorner")
+
+ModeCorner.CornerRadius =
+	UDim.new(0,8)
+
+ModeCorner.Parent = ModeButton
+
+local function UpdateModeText()
+
+	CONFIG.Mode =
+		MODES[ModeIndex]
+
+	ModeButton.Text =
+		"MODE • " ..
+		string.upper(
+			CONFIG.Mode
+		)
+
+end
+
+UpdateModeText()
+
+ModeButton.MouseButton1Click:Connect(function()
+
+	if Running then
+		return
+	end
+
+	ModeIndex += 1
+
+	if ModeIndex > #MODES then
+
+		ModeIndex = 1
+
+	end
+
+	UpdateModeText()
+
+end)
+
+--============================================================
+-- POSITION MODE
+--============================================================
+
+local PositionButton =
+	Instance.new("TextButton")
+
+PositionButton.Size =
+	UDim2.new(1,0,0,34)
+
+PositionButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
+
+PositionButton.TextColor3 =
+	Color3.new(1,1,1)
+
+PositionButton.TextSize = 11
+
+PositionButton.Font =
+	Enum.Font.GothamBold
+
+PositionButton.LayoutOrder = 3
+
+PositionButton.Parent = Scroll
+
+local PositionCorner =
+	Instance.new("UICorner")
+
+PositionCorner.CornerRadius =
+	UDim.new(0,8)
+
+PositionCorner.Parent = PositionButton
+
+local PositionModes = {
+	"Center",
+	"Front",
+	"Back",
+}
+
+local PositionIndex = 1
+
+local function UpdatePositionText()
+
+	CONFIG.PositionMode =
+		PositionModes[
+			PositionIndex
+		]
+
+	PositionButton.Text =
+		"POSITION • " ..
+		string.upper(
+			CONFIG.PositionMode
+		)
+
+end
+
+UpdatePositionText()
+
+PositionButton.MouseButton1Click:Connect(function()
+
+	if Running then
+		return
+	end
+
+	PositionIndex += 1
+
+	if PositionIndex >
+		#PositionModes then
+
+		PositionIndex = 1
+
+	end
+
+	UpdatePositionText()
+
+end)
+
+--============================================================
+-- DISTANCE
+--============================================================
+
+local DistanceRow =
+	Instance.new("Frame")
+
+DistanceRow.Size =
+	UDim2.new(1,0,0,34)
+
+DistanceRow.BackgroundTransparency = 1
+
+DistanceRow.LayoutOrder = 4
+
+DistanceRow.Parent = Scroll
+
+local DistanceLabel =
+	Instance.new("TextLabel")
+
+DistanceLabel.Size =
+	UDim2.new(0.55,0,1,0)
+
+DistanceLabel.BackgroundTransparency = 1
+
+DistanceLabel.Text =
+	"DISTANCE (STUD)"
+
+DistanceLabel.TextColor3 =
+	Color3.fromRGB(
+		190,
+		190,
+		190
+	)
+
+DistanceLabel.TextSize = 11
+
+DistanceLabel.Font =
+	Enum.Font.GothamBold
+
+DistanceLabel.TextXAlignment =
+	Enum.TextXAlignment.Left
+
+DistanceLabel.Parent = DistanceRow
+
+local DistanceBox =
+	Instance.new("TextBox")
+
+DistanceBox.Size =
+	UDim2.new(0.45,0,0,29)
+
+DistanceBox.Position =
+	UDim2.new(0.55,0,0,2)
+
+DistanceBox.BackgroundColor3 =
+	Color3.fromRGB(
+		50,
+		50,
+		50
+	)
+
+DistanceBox.Text =
+	tostring(
+		CONFIG.Distance
+	)
+
+DistanceBox.TextColor3 =
+	Color3.new(1,1,1)
+
+DistanceBox.TextSize = 12
+
+DistanceBox.Font =
+	Enum.Font.Gotham
+
+DistanceBox.ClearTextOnFocus = false
+
+DistanceBox.Parent = DistanceRow
+
+local DistanceCorner =
+	Instance.new("UICorner")
+
+DistanceCorner.CornerRadius =
+	UDim.new(0,7)
+
+DistanceCorner.Parent = DistanceBox
+
+local function UpdateDistance()
+
+	local Number =
+		tonumber(
+			DistanceBox.Text
+		)
+
+	if not Number then
+
+		DistanceBox.Text =
+			tostring(
+				CONFIG.Distance
+			)
+
+		return
+
+	end
+
+	CONFIG.Distance =
+		math.clamp(
+			Number,
+			0,
+			CONFIG.MaxDistance
+		)
+
+	DistanceBox.Text =
+		tostring(
+			CONFIG.Distance
+		)
+
+end
+
+DistanceBox.FocusLost:Connect(
+	UpdateDistance
+)
+
+--============================================================
+-- SELECTED LABEL
+--============================================================
+
+local SelectedLabel =
+	CreateLabel(
+		"TARGET PLAYER  •  NONE",
+		22,
+		5
+	)
+
+--============================================================
+-- PLAYER LIST
+--============================================================
+
+local PlayerList =
+	Instance.new("ScrollingFrame")
+
+PlayerList.Name =
+	"PlayerList"
+
+PlayerList.Size =
+	UDim2.new(1,0,0,105)
+
+PlayerList.BackgroundColor3 =
+	Color3.fromRGB(
+		35,
+		35,
+		35
+	)
+
+PlayerList.BorderSizePixel = 0
+
+PlayerList.ScrollBarThickness = 4
+
+PlayerList.CanvasSize =
+	UDim2.fromOffset(0,0)
+
+PlayerList.ScrollingDirection =
+	Enum.ScrollingDirection.Y
+
+PlayerList.LayoutOrder = 6
+
+PlayerList.Parent = Scroll
+
+local PlayerCorner =
+	Instance.new("UICorner")
+
+PlayerCorner.CornerRadius =
+	UDim.new(0,8)
+
+PlayerCorner.Parent = PlayerList
+
+local PlayerLayout =
+	Instance.new("UIListLayout")
+
+PlayerLayout.Padding =
+	UDim.new(0,4)
+
+PlayerLayout.SortOrder =
+	Enum.SortOrder.Name
+
+PlayerLayout.Parent = PlayerList
+
+local PlayerPadding =
+	Instance.new("UIPadding")
+
+PlayerPadding.PaddingTop =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingBottom =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingLeft =
+	UDim.new(0,5)
+
+PlayerPadding.PaddingRight =
+	UDim.new(0,5)
+
+PlayerPadding.Parent = PlayerList
+
+PlayerLayout:GetPropertyChangedSignal(
+	"AbsoluteContentSize"
+):Connect(function()
+
+	PlayerList.CanvasSize =
+		UDim2.fromOffset(
+			0,
+			PlayerLayout.AbsoluteContentSize.Y + 10
+		)
+
+end)
+
+--============================================================
+-- SELECTED LABEL UPDATE
+--============================================================
+
+local function UpdateSelectedLabel()
+
+	if not SelectedPlayer then
+
+		SelectedLabel.Text =
+			"TARGET PLAYER  •  NONE"
+
+		return
+
+	end
+
+	local TeamName = "No Team"
+
+	if SelectedPlayer.Team then
+
+		TeamName =
+			SelectedPlayer.Team.Name
+
+	end
+
+	local LockText = ""
+
+	if LockedPlayer == SelectedPlayer then
+
+		LockText = "  🔒 LOCKED"
+
+	end
+
+	SelectedLabel.Text =
+		"TARGET • " ..
+		SelectedPlayer.Name ..
+		"  [" ..
+		TeamName ..
+		"]" ..
+		LockText
+
+end
+
+--============================================================
+-- RAINBOW HIGHLIGHT
+--============================================================
+
+local RainbowHighlight = nil
+local RainbowConnection = nil
+
+local function RemoveHighlight()
+
+	if RainbowConnection then
+
+		RainbowConnection:Disconnect()
+
+		RainbowConnection = nil
+
+	end
+
+	if RainbowHighlight then
+
+		RainbowHighlight:Destroy()
+
+		RainbowHighlight = nil
+
+	end
+
+end
+
+local function HighlightPlayer(Player)
+
+	RemoveHighlight()
+
+	if not Player then
+		return
+	end
+
+	local Character =
+		Player.Character
+
+	if not Character then
+		return
+	end
+
+	local Highlight =
+		Instance.new("Highlight")
+
+	Highlight.Name =
+		"TL_Selected_Rainbow"
+
+	Highlight.Adornee =
+		Character
+
+	Highlight.FillTransparency =
+		0.85
+
+	Highlight.OutlineTransparency =
+		0
+
+	Highlight.Parent =
+		ScreenGui
+
+	RainbowHighlight =
+		Highlight
+
+	local Hue = 0
+
+	RainbowConnection =
+		RunService.RenderStepped:Connect(
+			function(dt)
+
+				if not Highlight.Parent then
+					return
+				end
+
+				Hue =
+					(Hue + dt * 0.5)
+					% 1
+
+				Highlight.OutlineColor =
+					Color3.fromHSV(
+						Hue,
+						1,
+						1
+					)
+
+			end
+		)
+
+end
+
+--============================================================
+-- SELECT PLAYER
+--============================================================
+
+local function SelectPlayer(Player)
+
+	SelectedPlayer =
+		Player
+
+	UpdateSelectedLabel()
+
+	HighlightPlayer(Player)
+
+end
+
+--============================================================
+-- PLAYER BUTTON
+--============================================================
+
+local function CreatePlayerButton(Player)
+
+	local Button =
+		Instance.new("TextButton")
+
+	Button.Name =
+		"Player_" ..
+		Player.UserId
+
+	Button.Size =
+		UDim2.new(
+			1,
+			-10,
+			0,
+			32
+		)
+
+	Button.BackgroundColor3 =
+		Color3.fromRGB(
+			50,
+			50,
+			50
+		)
+
+	Button.TextColor3 =
+		Color3.new(1,1,1)
+
+	Button.TextSize = 10
+
+	Button.Font =
+		Enum.Font.GothamBold
+
+	Button.TextXAlignment =
+		Enum.TextXAlignment.Left
+
+	local TeamName = "No Team"
+
+	if Player.Team then
+
+		TeamName =
+			Player.Team.Name
+
+	end
+
+	Button.Text =
+		"  " ..
+		Player.Name ..
+		"   •   " ..
+		TeamName
+
+	Button.Parent =
+		PlayerList
+
+	local Corner =
+		Instance.new("UICorner")
+
+	Corner.CornerRadius =
+		UDim.new(0,6)
+
+	Corner.Parent = Button
+
+	Button.MouseButton1Click:Connect(
+		function()
+
+			SelectPlayer(
+				Player
+			)
+
+		end
+	)
+
+end
+
+--============================================================
+-- REFRESH PLAYERS
+--============================================================
+
+local function RefreshPlayers()
+
+	for _, Child in ipairs(
+		PlayerList:GetChildren()
+	) do
+
+		if Child:IsA("TextButton") then
+
+			Child:Destroy()
+
+		end
+
+	end
+
+	for _, Player in ipairs(
+		Players:GetPlayers()
+	) do
+
+		if Player ~= LocalPlayer then
+
+			CreatePlayerButton(
+				Player
+			)
+
+		end
+
+	end
+
+end
+
+RefreshPlayers()
+
+Players.PlayerAdded:Connect(
+	function()
+
+		task.wait()
+
+		RefreshPlayers()
+
+	end
+)
+
+Players.PlayerRemoving:Connect(
+	function(Player)
+
+		if SelectedPlayer == Player then
+
+			SelectedPlayer = nil
+
+			RemoveHighlight()
+
+			UpdateSelectedLabel()
+
+		end
+
+		if LockedPlayer == Player then
+
+			LockedPlayer = nil
+
+			UpdateSelectedLabel()
+
+		end
+
+		RefreshPlayers()
+
+	end
+)
+
+--============================================================
+-- REFRESH PLAYERS BUTTON
+--============================================================
+
+local RefreshPlayersButton =
+	Instance.new("TextButton")
+
+RefreshPlayersButton.Size =
+	UDim2.new(1,0,0,29)
+
+RefreshPlayersButton.BackgroundColor3 =
+	Color3.fromRGB(
+		55,
+		55,
+		55
+	)
+
+RefreshPlayersButton.Text =
+	"↻  REFRESH PLAYERS"
+
+RefreshPlayersButton.TextColor3 =
+	Color3.new(1,1,1)
+
+RefreshPlayersButton.TextSize = 10
+
+RefreshPlayersButton.Font =
+	Enum.Font.GothamBold
+
+RefreshPlayersButton.LayoutOrder = 7
+
+RefreshPlayersButton.Parent =
+	Scroll
+
+local RPCorner =
+	Instance.new("UICorner")
+
+RPCorner.CornerRadius =
+	UDim.new(0,7)
+
+RPCorner.Parent =
+	RefreshPlayersButton
+
+RefreshPlayersButton.MouseButton1Click:Connect(
+	RefreshPlayers
+)
+
+--============================================================
+-- LOCK PLAYER BUTTON
+--============================================================
+
+local LockPlayerButton =
+	Instance.new("TextButton")
+
+LockPlayerButton.Size =
+	UDim2.new(1,0,0,31)
+
+LockPlayerButton.BackgroundColor3 =
+	Color3.fromRGB(
+		65,
+		65,
+		65
+	)
+
+LockPlayerButton.Text =
+	"LOCK SELECTED PLAYER"
+
+LockPlayerButton.TextColor3 =
+	Color3.new(1,1,1)
+
+LockPlayerButton.TextSize = 10
+
+LockPlayerButton.Font =
+	Enum.Font.GothamBold
+
+LockPlayerButton.LayoutOrder = 8
+
+LockPlayerButton.Parent =
+	Scroll
+
+local LPCorner =
+	Instance.new("UICorner")
+
+LPCorner.CornerRadius =
+	UDim.new(0,7)
+
+LPCorner.Parent =
+	LockPlayerButton
+
+local function UpdateLockButton()
+
+	if LockedPlayer then
+
+		LockPlayerButton.Text =
+			"🔒 LOCKED: " ..
+			LockedPlayer.Name
+
+	else
+
+		LockPlayerButton.Text =
+			"LOCK SELECTED PLAYER"
+
+	end
+
+	UpdateSelectedLabel()
+
+end
+
+LockPlayerButton.MouseButton1Click:Connect(
+	function()
+
+		if not SelectedPlayer then
+			return
+		end
+
+		if LockedPlayer ==
+			SelectedPlayer then
+
+			LockedPlayer = nil
+
+		else
+
+			LockedPlayer =
+				SelectedPlayer
+
+		end
+
+		UpdateLockButton()
+
+	end
+)
+
+--============================================================
+-- TEAM FILTER
+--============================================================
+
+CreateLabel(
+	"IGNORE TEAMS",
+	22,
+	9
+)
+
+local TeamList =
+	Instance.new("ScrollingFrame")
+
+TeamList.Name =
+	"TeamList"
+
+TeamList.Size =
+	UDim2.new(1,0,0,100)
+
+TeamList.BackgroundColor3 =
+	Color3.fromRGB(
+		35,
+		35,
+		35
+	)
+
+TeamList.BorderSizePixel = 0
+
+TeamList.ScrollBarThickness = 4
+
+TeamList.CanvasSize =
+	UDim2.fromOffset(0,0)
+
+TeamList.ScrollingDirection =
+	Enum.ScrollingDirection.Y
+
+TeamList.LayoutOrder = 10
+
+TeamList.Parent = Scroll
+
+local TeamCorner =
+	Instance.new("UICorner")
+
+TeamCorner.CornerRadius =
+	UDim.new(0,8)
+
+TeamCorner.Parent = TeamList
+
+local TeamLayout =
+	Instance.new("UIListLayout")
+
+TeamLayout.Padding =
+	UDim.new(0,4)
+
+TeamLayout.SortOrder =
+	Enum.SortOrder.Name
+
+TeamLayout.Parent = TeamList
+
+local TeamPadding =
+	Instance.new("UIPadding")
+
+TeamPadding.PaddingTop =
+	UDim.new(0,5)
+
+TeamPadding.PaddingBottom =
+	UDim.new(0,5)
+
+TeamPadding.PaddingLeft =
+	UDim.new(0,5)
+
+TeamPadding.PaddingRight =
+	UDim.new(0,5)
+
+TeamPadding.Parent = TeamList
+
+TeamLayout:GetPropertyChangedSignal(
+	"AbsoluteContentSize"
+):Connect(
+	function()
+
+		TeamList.CanvasSize =
+			UDim2.fromOffset(
+				0,
+				TeamLayout.AbsoluteContentSize.Y + 10
+			)
+
+	end
+)
+
+--============================================================
+-- TEAM BUTTON
+--============================================================
+
+local function CreateTeamButton(Team)
+
+	local Button =
+		Instance.new("TextButton")
+
+	Button.Name =
+		"Team_" ..
+		Team.Name
+
+	Button.Size =
+		UDim2.new(
+			1,
+			-10,
+			0,
+			30
+		)
+
+	Button.BackgroundColor3 =
+		Color3.fromRGB(
+			50,
+			50,
+			50
+		)
+
+	Button.TextColor3 =
+		Color3.new(1,1,1)
+
+	Button.TextSize = 11
+
+	Button.Font =
+		Enum.Font.GothamBold
+
+	Button.Parent =
+		TeamList
+
+	local Corner =
+		Instance.new("UICorner")
+
+	Corner.CornerRadius =
+		UDim.new(0,6)
+
+	Corner.Parent = Button
+
+	local function UpdateVisual()
+
+		if IgnoredTeams[Team] then
+
+			Button.Text =
+				"✓  " ..
+				Team.Name
+
+			Button.BackgroundColor3 =
+				Color3.fromRGB(
+					75,
+					75,
+					75
+				)
+
+		else
+
+			Button.Text =
+				"○  " ..
+				Team.Name
+
+			Button.BackgroundColor3 =
+				Color3.fromRGB(
+					50,
+					50,
+					50
+				)
+
+		end
+
+	end
+
+	UpdateVisual()
+
+	Button.MouseButton1Click:Connect(
+		function()
+
+			if IgnoredTeams[Team] then
+
+				IgnoredTeams[Team] =
+					nil
+
+			else
+
+				IgnoredTeams[Team] =
+					true
+
+			end
+
+			UpdateVisual()
+
+		end
+	)
+
+end
+
+--============================================================
+-- REFRESH TEAMS
+--============================================================
+
+local function RefreshTeams()
+
+	for _, Child in ipairs(
+		TeamList:GetChildren()
+	) do
+
+		if Child:IsA("TextButton") then
+
+			Child:Destroy()
+
+		end
+
+	end
+
+	for _, Team in ipairs(
+		Teams:GetTeams()
+	) do
+
+		CreateTeamButton(
+			Team
+		)
+
+	end
+
+end
+
+RefreshTeams()
+
+Teams.ChildAdded:Connect(
+	function()
+
+		task.wait()
+
+		RefreshTeams()
+
+	end
+)
+
+Teams.ChildRemoved:Connect(
+	function(Team)
+
+		IgnoredTeams[Team] =
+			nil
+
+		task.wait()
+
+		RefreshTeams()
+
+	end
+)
+
+--============================================================
+-- TEAM PERSISTENCE
+--============================================================
+
+if not TeamInitialized then
+
+	if LocalPlayer.Team then
+
+		IgnoredTeams[
+			LocalPlayer.Team
+		] = true
+
+	end
+
+	TeamInitialized = true
+
+end
+
+--============================================================
+-- CONTROL BUTTON
+--============================================================
+
+local function CreateControlButton(
+	Name,
+	Text,
+	Order
+)
+
+	local Button =
+		Instance.new("TextButton")
+
+	Button.Name = Name
+
+	Button.Size =
+		UDim2.new(
+			1,
+			0,
+			0,
+			35
+		)
+
+	Button.BackgroundColor3 =
+		Color3.fromRGB(
+			55,
+			55,
+			55
+		)
+
+	Button.Text = Text
+
+	Button.TextColor3 =
+		Color3.new(1,1,1)
+
+	Button.TextSize = 12
+
+	Button.Font =
+		Enum.Font.GothamBold
+
+	Button.LayoutOrder = Order
+
+	Button.Parent = Scroll
+
+	local Corner =
+		Instance.new("UICorner")
+
+	Corner.CornerRadius =
+		UDim.new(0,8)
+
+	Corner.Parent = Button
+
+	return Button
+
+end
+
+--============================================================
+-- ACTION BUTTONS
+--============================================================
+
+local TLButton =
+	CreateControlButton(
+		"TLOnce",
+		"TL • ONCE",
+		11
+	)
+
+local TLTargetButton =
+	CreateControlButton(
+		"TLToTarget",
+		"TL • TO TARGET",
+		12
+	)
+
+local LTLButton =
+	CreateControlButton(
+		"LTL",
+		"LTL • LOOP",
+		13
+	)
+
+local StopButton =
+	CreateControlButton(
+		"Stop",
+		"STOP FORCE",
+		14
+	)
+
+--============================================================
+-- STATUS
+--============================================================
+
+local Status =
+	Instance.new("TextLabel")
+
+Status.Size =
+	UDim2.new(
+		1,
+		0,
+		0,
+		22
+	)
+
+Status.BackgroundTransparency = 1
+
+Status.Text =
+	"READY"
+
+Status.TextColor3 =
+	Color3.fromRGB(
+		150,
+		150,
+		150
+	)
+
+Status.TextSize = 10
+
+Status.Font =
+	Enum.Font.GothamBold
+
+Status.LayoutOrder = 15
+
+Status.Parent = Scroll
+
+--============================================================
+-- GET ROOT
+--============================================================
+
+local function GetRoot()
+
+	local Character =
+		LocalPlayer.Character
+
+	if not Character then
+		return nil
+	end
+
+	return Character:FindFirstChild(
+		"HumanoidRootPart"
+	)
+
+end
+
+--============================================================
+-- SAVE START
+--============================================================
+
+local function SaveStartPosition()
+
+	local Root =
+		GetRoot()
+
+	if Root then
+
+		StartCFrame =
+			Root.CFrame
+
+	else
+
+		StartCFrame = nil
+
+	end
+
+end
+
+--============================================================
+-- RETURN
+--============================================================
+
+local function ReturnToStart()
+
+	if not StartCFrame then
+		return
+	end
+
+	local Root =
+		GetRoot()
+
+	if Root then
+
+		Root.CFrame =
+			StartCFrame
+
+	end
+
+end
+
+--============================================================
+-- TEAM CHECK
+--============================================================
+
+local function IsIgnoredTeam(Player)
+
+	if not Player then
+		return false
+	end
+
+	local Team =
+		Player.Team
+
+	if not Team then
+		return false
+	end
+
+	return IgnoredTeams[Team] == true
+
+end
+
+--============================================================
+-- NORMAL VALID TARGET
+--============================================================
+
+local function IsValidTarget(Player)
+
+	if not Player then
+		return false
+	end
+
+	if Player ==
+		LocalPlayer then
+
+		return false
+
+	end
+
+	if not Player.Parent then
+		return false
+	end
+
+	if IsIgnoredTeam(Player) then
+		return false
+	end
+
+	local Character =
+		Player.Character
+
+	if not Character then
+		return false
+	end
+
+	local Root =
+		Character:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not Root then
+		return false
+	end
+
+	local Humanoid =
+		Character:FindFirstChildOfClass(
+			"Humanoid"
+		)
+
+	if Humanoid
+		and Humanoid.Health <= 0 then
+
+		return false
+
+	end
+
+	return true
+
+end
+
+--============================================================
+-- LOCKED TARGET VALID
+--============================================================
+-- IMPORTANT:
+-- This function DOES NOT check IgnoreTeams.
+-- Locked Player has absolute priority.
+
+local function IsValidLockedTarget(Player)
+
+	if not Player then
+		return false
+	end
+
+	if Player ==
+		LocalPlayer then
+
+		return false
+
+	end
+
+	if not Player.Parent then
+		return false
+	end
+
+	local Character =
+		Player.Character
+
+	if not Character then
+		return false
+	end
+
+	local Root =
+		Character:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not Root then
+		return false
+	end
+
+	local Humanoid =
+		Character:FindFirstChildOfClass(
+			"Humanoid"
+		)
+
+	if Humanoid
+		and Humanoid.Health <= 0 then
+
+		return false
+
+	end
+
+	return true
+
+end
+
+--============================================================
+-- TARGET CFRAME
+--============================================================
+
+local function GetTargetCFrame(
+	TargetRoot
+)
+
+	if CONFIG.PositionMode ==
+		"Center" then
+
+		return TargetRoot.CFrame
+
+	end
+
+	if CONFIG.PositionMode ==
+		"Front" then
+
+		return TargetRoot.CFrame *
+			CFrame.new(
+				0,
+				0,
+				-CONFIG.Distance
+			)
+
+	end
+
+	if CONFIG.PositionMode ==
+		"Back" then
+
+		return TargetRoot.CFrame *
+			CFrame.new(
+				0,
+				0,
+				CONFIG.Distance
+			)
+
+	end
+
+	return TargetRoot.CFrame
+
+end
+
+--============================================================
+-- NORMAL TELEPORT
+--============================================================
+
+local function TeleportTo(Player)
+
+	local Root =
+		GetRoot()
+
+	if not Root then
+		return false
+	end
+
+	if not IsValidTarget(Player) then
+		return false
+	end
+
+	local Character =
+		Player.Character
+
+	local TargetRoot =
+		Character and
+		Character:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not TargetRoot then
+		return false
+	end
+
+	Root.CFrame =
+		GetTargetCFrame(
+			TargetRoot
+		)
+
+	return true
+
+end
+
+--============================================================
+-- LOCKED TELEPORT
+--============================================================
+-- IMPORTANT:
+-- IgnoreTeams is deliberately NOT checked.
+
+local function TeleportToLocked(Player)
+
+	local Root =
+		GetRoot()
+
+	if not Root then
+		return false
+	end
+
+	if not IsValidLockedTarget(Player) then
+		return false
+	end
+
+	local Character =
+		Player.Character
+
+	local TargetRoot =
+		Character and
+		Character:FindFirstChild(
+			"HumanoidRootPart"
+		)
+
+	if not TargetRoot then
+		return false
+	end
+
+	Root.CFrame =
+		GetTargetCFrame(
+			TargetRoot
+		)
+
+	LastTarget =
+		Player
+
+	return true
+
+end
+
+--============================================================
+-- TARGET LIST
+--============================================================
+
+local function GetTargets()
+
+	local Targets = {}
+
+	for _, Player in ipairs(
+		Players:GetPlayers()
+	) do
+
+		if IsValidTarget(Player) then
+
+			table.insert(
+				Targets,
+				Player
+			)
+
+		end
+
+	end
+
+	return Targets
+
+end
+
+--============================================================
+-- DELAY
+--============================================================
+
+local function TeleportDelay(
+	Token
+)
+
+	if not Running then
+		return false
+	end
+
+	if Token ~= ActionToken then
+		return false
+	end
+
+	if CONFIG.TeleportDelay > 0 then
+
+		task.wait(
+			CONFIG.TeleportDelay
+		)
+
+	else
+
+		task.wait()
+
+	end
+
+	if not Running then
+		return false
+	end
+
+	if Token ~= ActionToken then
+		return false
+	end
+
+	return true
+
+end
+
+--============================================================
+-- SHUFFLE
+--============================================================
+
+local function Shuffle(Targets)
+
+	for i =
+		#Targets,
+		2,
+		-1 do
+
+		local j =
+			math.random(
+				1,
+				i
+			)
+
+		Targets[i],
+		Targets[j] =
+			Targets[j],
+			Targets[i]
+
+	end
+
+end
+
+--============================================================
+-- NORMAL
+--============================================================
+
+local function RunNormal(
+	Targets,
+	Token
+)
+
+	for _, Player in ipairs(
+		Targets
+	) do
+
+		if not Running
+			or Token ~= ActionToken then
+
+			return
+
+		end
+
+		if IsValidTarget(Player) then
+
+			TeleportTo(
+				Player
+			)
+
+			LastTarget =
+				Player
+
+			if not TeleportDelay(
+				Token
+			) then
+
+				return
+
+			end
+
+		end
+
+	end
+
+end
+
+--============================================================
+-- RANDOM
+--============================================================
+
+local function RunRandom(
+	Targets,
+	Token
+)
+
+	Shuffle(Targets)
+
+	RunNormal(
+		Targets,
+		Token
+	)
+
+end
+
+--============================================================
+-- NEAREST
+--============================================================
+
+local function GetNearestTarget(
+	Targets
+)
+
+	local Root =
+		GetRoot()
+
+	if not Root then
+		return nil
+	end
+
+	local Best = nil
+
+	local BestDistance =
+		math.huge
+
+	for _, Player in ipairs(
+		Targets
+	) do
+
+		if IsValidTarget(Player) then
+
+			local Character =
+				Player.Character
+
+			local TargetRoot =
+				Character and
+				Character:FindFirstChild(
+					"HumanoidRootPart"
+				)
+
+			if TargetRoot then
+
+				local Distance =
+					(
+						Root.Position -
+						TargetRoot.Position
+					).Magnitude
+
+				if Distance <
+					BestDistance then
+
+					BestDistance =
+						Distance
+
+					Best =
+						Player
+
+				end
+
+			end
+
+		end
+
+	end
+
+	return Best
+
+end
+
+local function RunNearest(
+	Token
+)
+
+	local Remaining =
+		GetTargets()
+
+	while Running
+		and Token == ActionToken
+		and #Remaining > 0 do
+
+		local Target =
+			GetNearestTarget(
+				Remaining
+			)
+
+		if not Target then
+			break
+		end
+
+		TeleportTo(
+			Target
+		)
+
+		LastTarget =
+			Target
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			break
+
+		end
+
+		for i, Player in ipairs(
+			Remaining
+		) do
+
+			if Player ==
+				Target then
+
+				table.remove(
+					Remaining,
+					i
+				)
+
+				break
+
+			end
+
+		end
+
+	end
+
+end
+
+--============================================================
+-- HUNTER
+--============================================================
+
+local function GetFarthestTarget(
+	Targets
+)
+
+	local Root =
+		GetRoot()
+
+	if not Root then
+		return nil
+	end
+
+	local Best = nil
+
+	local BestDistance = -1
+
+	for _, Player in ipairs(
+		Targets
+	) do
+
+		if IsValidTarget(Player) then
+
+			local Character =
+				Player.Character
+
+			local TargetRoot =
+				Character and
+				Character:FindFirstChild(
+					"HumanoidRootPart"
+				)
+
+			if TargetRoot then
+
+				local Distance =
+					(
+						Root.Position -
+						TargetRoot.Position
+					).Magnitude
+
+				if Distance >
+					BestDistance then
+
+					BestDistance =
+						Distance
+
+					Best =
+						Player
+
+				end
+
+			end
+
+		end
+
+	end
+
+	return Best
+
+end
+
+local function RunHunter(
+	Token
+)
+
+	local Remaining =
+		GetTargets()
+
+	while Running
+		and Token == ActionToken
+		and #Remaining > 0 do
+
+		local Target =
+			GetFarthestTarget(
+				Remaining
+			)
+
+		if not Target then
+			break
+		end
+
+		TeleportTo(
+			Target
+		)
+
+		LastTarget =
+			Target
+
+		if not TeleportDelay(
+			Token
+		) then
+
+			break
+
+		end
+
+		for i, Player in ipairs(
+			Remaining
+		) do
+
+			if Player ==
+				Target then
+
+				table.remove(
+					Remaining,
+					i
+				)
+
+				break
+
+			end
+
+		end
+
+	end
+
+end
+
+--============================================================
+-- PING PONG
+--============================================================
+
+local function RunPingPong(
+	Token
+)
+
+	local Targets =
+		GetTargets()
+
+	table.sort(
+		Targets,
+		function(A,B)
+
+			return A.Name <
+				B.Name
+
+		end
+	)
+
+	if #Targets == 0 then
+		return
+	end
+
+	if PingPongForward then
+
+		for i = 1,#Targets do
+
+			if not Running
+				or Token ~= ActionToken then
+
+				return
+
+			end
+
+			local Player =
+				Targets[i]
+
+			if IsValidTarget(
+				Player
+			) then
+
+				TeleportTo(
+					Player
+				)
+
+				LastTarget =
+					Player
+
+				if not TeleportDelay(
+					Token
+				) then
+
+					return
+
+				end
+
+			end
+
+		end
+
+	else
+
+		for i =
+			#Targets,
+			1,
+			-1 do
+
+			if not Running
+				or Token ~= ActionToken then
+
+				return
+
+			end
+
+			local Player =
+				Targets[i]
+
+			if IsValidTarget(
+				Player
+			) then
+
+				TeleportTo(
+					Player
+				)
+
+				LastTarget =
+					Player
+
+				if not TeleportDelay(
+					Token
+				) then
+
+					return
+
+				end
+
+			end
+
+		end
+
+	end
+
+	PingPongForward =
+		not PingPongForward
+
+end
+
+--============================================================
+-- SURVIVOR
+--============================================================
+
+local function RunSurvivor(
+	Token
+)
+
+	local Targets =
+		GetTargets()
+
+	for _, Player in ipairs(
+		Targets
+	) do
+
+		if not Running
+			or Token ~= ActionToken then
+
+			return
+
+		end
+
+		if IsValidTarget(
+			Player
+		) then
+
+			TeleportTo(
+				Player
+			)
+
+			LastTarget =
+				Player
+
+			if not TeleportDelay(
+				Token
+			) then
+
+				return
+
+			end
+
+		end
+
+	end
+
+end
+
+--============================================================
+-- LAST
+--============================================================
+
+local function RunLast(
+	Token
+)
+
+	if LastTarget
+		and IsValidTarget(
+			LastTarget
+		) then
+
+		TeleportTo(
+			LastTarget
+		)
+
+		TeleportDelay(
+			Token
+		)
+
+		return
+
+	end
+
+	local Targets =
+		GetTargets()
+
+	if #Targets == 0 then
+		return
+	end
+
+	local Target =
+		Targets[1]
+
+	if IsValidTarget(
+		Target
+	) then
+
+		TeleportTo(
+			Target
+		)
+
+		LastTarget =
+			Target
+
+		TeleportDelay(
+			Token
+		)
+
+	end
+
+end
+
+--============================================================
+-- CYCLE
+--============================================================
+
+local function RunCycle(
+	Token
+)
+
+	RunNormal(
+		GetTargets(),
+		Token
+	)
+
+end
+
+--============================================================
+-- RUN NORMAL MODE
+--============================================================
+
+local function RunPass(
+	Token
+)
+
+	if CONFIG.Mode ==
+		"Normal" then
+
+		RunNormal(
+			GetTargets(),
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Lock" then
+
+		-- Mode LOCK juga memakai
+		-- locked player.
+		if LockedPlayer then
+
+			TeleportToLocked(
+				LockedPlayer
+			)
+
+			TeleportDelay(
+				Token
+			)
+
+		end
+
+	elseif CONFIG.Mode ==
+		"Random" then
+
+		RunRandom(
+			GetTargets(),
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Nearest" then
+
+		RunNearest(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Cycle" then
+
+		RunCycle(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Hunter" then
+
+		RunHunter(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Ping-Pong" then
+
+		RunPingPong(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Survivor" then
+
+		RunSurvivor(
+			Token
+		)
+
+	elseif CONFIG.Mode ==
+		"Last" then
+
+		RunLast(
+			Token
+		)
+
+	end
+
+end
+
+--============================================================
+-- TL ONCE
+--============================================================
+
+local function RunTLOnce()
+
+	if Running then
+		return
+	end
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = false
+
+	LastTarget = nil
+
+	SaveStartPosition()
+
+	Status.Text =
+		"TL • " ..
+		string.upper(
+			CONFIG.Mode
+		)
+
+	--========================================================
+	-- LOCKED PLAYER HAS ABSOLUTE PRIORITY
+	--========================================================
+
+	if LockedPlayer then
+
+		-- Ignore Team Filter.
+		-- Ignore Mode.
+		-- Always use LockedPlayer.
+
+		if IsValidLockedTarget(
+			LockedPlayer
+		) then
+
+			TeleportToLocked(
+				LockedPlayer
+			)
+
+			TeleportDelay(
+				Token
+			)
+
+		end
+
+	else
+
+		-- Tidak ada Locked Player.
+		-- Gunakan mode normal.
+
+		RunPass(
+			Token
+		)
+
+	end
+
+	--========================================================
+	-- RETURN
+	--========================================================
+
+	if Running
+		and Token == ActionToken then
+
+		ReturnToStart()
+
+	end
+
+	if Token ==
+		ActionToken then
+
+		Running = false
+
+	end
+
+	StartCFrame = nil
+
+	if not Running then
+
+		Status.Text =
+			"FINISHED"
+
+	end
+
+end
+
+--============================================================
+-- TL TO TARGET
+--============================================================
+
+local function RunTLToTarget()
+
+	if Running then
+		return
+	end
+
+	-- HARUS ADA LOCK
+	if not LockedPlayer then
+
+		Status.Text =
+			"NO LOCKED TARGET"
+
+		return
+
+	end
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = false
+
+	Status.Text =
+		"TL → TARGET"
+
+	-- Tidak peduli:
+	-- Mode
+	-- Ignore Team
+	-- SelectedPlayer
+	--
+	-- HANYA LockedPlayer.
+
+	if IsValidLockedTarget(
+		LockedPlayer
+	) then
+
+		TeleportToLocked(
+			LockedPlayer
+		)
+
+	else
+
+		Status.Text =
+			"LOCKED TARGET INVALID"
+
+	end
+
+	--========================================================
+	-- IMPORTANT:
+	-- TIDAK ADA ReturnToStart()
+	--========================================================
+
+	if Token ==
+		ActionToken then
+
+		Running = false
+
+	end
+
+	StartCFrame = nil
+
+	if not Running then
+
+		Status.Text =
+			"STAY AT TARGET"
+
+	end
+
+end
+
+--============================================================
+-- LTL LOOP
+--============================================================
+
+local function RunLTL()
+
+	if Running then
+		return
+	end
+
+	ActionToken += 1
+
+	local Token =
+		ActionToken
+
+	Running = true
+	LoopMode = true
+
+	LastTarget = nil
+
+	PingPongForward = true
+
+	SaveStartPosition()
+
+	Status.Text =
+		"LTL • " ..
+		string.upper(
+			CONFIG.Mode
+		)
+
+	while Running
+		and LoopMode
+		and Token == ActionToken do
+
+		--====================================================
+		-- LOCKED PLAYER OVERRIDES EVERYTHING
+		--====================================================
+
+		if LockedPlayer then
+
+			if IsValidLockedTarget(
+				LockedPlayer
+			) then
+
+				TeleportToLocked(
+					LockedPlayer
+				)
+
+				if not TeleportDelay(
+					Token
+				) then
+
+					break
+
+				end
+
+			else
+
+				-- Jangan pindah ke target lain.
+				-- Tunggu sampai target valid lagi.
+
+				task.wait(0.1)
+
+			end
+
+		else
+
+			-- Tidak ada lock:
+			-- gunakan mode yang dipilih.
+
+			RunPass(
+				Token
+			)
+
+		end
+
+		if not Running
+			or Token ~= ActionToken then
+
+			break
+
+		end
+
+		task.wait()
+
+	end
+
+	-- LTL normal behavior:
+	-- kembali ke posisi awal ketika loop
+	-- dihentikan secara normal.
+
+	if Token == ActionToken then
+
+		ReturnToStart()
+
+		Running = false
+		LoopMode = false
+
+	end
+
+	StartCFrame = nil
+
+	Status.Text =
+		"LTL STOPPED"
+
+end
+
+--============================================================
+-- STOP FORCE
+--============================================================
+
+local function StopForce()
+
+	ActionToken += 1
+
+	Running = false
+	LoopMode = false
+
+	-- Jika sedang TL/LTL,
+	-- kembali ke posisi awal yang tersimpan.
+	ReturnToStart()
+
+	StartCFrame = nil
+	LastTarget = nil
+
+	Status.Text =
+		"STOP FORCE"
+
+end
+
+--============================================================
+-- MAIN BUTTON
+--============================================================
+
+MainButton.MouseButton1Click:Connect(
+	function()
+
+		Menu.Visible =
+			not Menu.Visible
+
+	end
+)
+
+--============================================================
+-- TL ONCE
+--============================================================
+
+TLButton.MouseButton1Click:Connect(
+	function()
+
+		if Running then
+			return
+		end
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunTLOnce
+		)
+
+	end
+)
+
+--============================================================
+-- TL TO TARGET
+--============================================================
+
+TLTargetButton.MouseButton1Click:Connect(
+	function()
+
+		if Running then
+			return
+		end
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunTLToTarget
+		)
+
+	end
+)
+
+--============================================================
+-- LTL
+--============================================================
+
+LTLButton.MouseButton1Click:Connect(
+	function()
+
+		if Running then
+			return
+		end
+
+		UpdateDelay()
+		UpdateDistance()
+
+		Menu.Visible = false
+
+		task.spawn(
+			RunLTL
+		)
+
+	end
+)
+
+--============================================================
+-- STOP
+--============================================================
+
+StopButton.MouseButton1Click:Connect(
+	function()
+
+		StopForce()
+
+		Menu.Visible = false
+
+	end
+)
+
+--============================================================
+-- LOCAL PLAYER RESPAWN
+--============================================================
+
+LocalPlayer.CharacterAdded:Connect(
+	function()
+
+		StartCFrame = nil
+
+		Status.Text =
+			"READY"
+
+	end
+)
+
+--============================================================
+-- SELECTED PLAYER CHARACTER UPDATE
+--============================================================
+
+Players.PlayerAdded:Connect(
+	function(Player)
+
+		Player.CharacterAdded:Connect(
+			function()
+
+				if SelectedPlayer ==
+					Player then
+
+					task.wait()
+
+					HighlightPlayer(
+						Player
+					)
+
+				end
+
+			end
+		)
+
+	end
+)
+
+--============================================================
+-- FINAL
+--============================================================
+
+print(
+	"TL/LTL V6.3 loaded successfully."
+)
